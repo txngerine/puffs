@@ -826,7 +826,7 @@ function resize(){
   FW=Math.min(W,H*0.8); FX=(W-FW)/2;
   // conversation sits above the EVE mark unless the screen is wide enough to sit beside it
   const besideMark=W/2-60*HS>584;
-  document.documentElement.style.setProperty('--talk-bottom',(besideMark?34:Math.round(H*0.023+44*HS))+'px');
+  document.documentElement.style.setProperty('--talk-bottom',(besideMark?96:Math.round(H*0.023+96*HS))+'px');
   const nw=Math.round(W*DPR), nh=Math.round(H*DPR);
   if(glc.width!==nw||glc.height!==nh){
     if(recording()) cancelCapture('window resized — recording cancelled');

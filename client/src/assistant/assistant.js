@@ -2,9 +2,10 @@
 import { ensureCtx, toMic, releaseMic, getState, hex } from '../engine/engine.js';
 import { brain, resolvePending } from './brain.js';
 import { setTimerHandler } from './timers.js';
-import { ttsSay, ttsCancel, ttsIdle, isSpeaking, cycleVoice, setVoiceByName, getRankedVoices, voiceLabel, applySettings, speechEvents, recentSpeech } from './speech.js';
+import { ttsSay, ttsCancel, ttsIdle, isSpeaking, cycleVoice, setVoiceByName, getRankedVoices, voiceLabel, loadVoices, applySettings, speechEvents, recentSpeech } from './speech.js';
 import { isEcho, isStop, isTalkingOver } from './bargein.js';
 import { parseWake } from './wake.js';
+import { isQuestion } from './question.js';
 import { store, toast } from '../lib/store.js';
 import { api } from '../lib/api.js';
 import { lsGet, lsSet } from '../lib/storage.js';
@@ -12,7 +13,7 @@ import { isNative } from '../native/native.js';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let sr = null, listening = false, srErrs = 0, assistantMic = false;
-let srRetry = 0;
+let srRetry = 0, interimTranscript = '';
 let turnId = 0, turnBusy = false, lastReply = '', listenTimer = 0, talkTimer = 0;
 
 const st = () => store.get();
@@ -27,6 +28,21 @@ function renderTalk(rows, hold) {
 }
 const showExchange = (u, r) => renderTalk([['you', u], ['eve', r]]);
 function respond(q, text) { lastReply = text; showExchange(q, text); ttsSay(text); }
+export function replayLastReply() {
+  if (!lastReply) return;
+  interrupt(); stopListen();
+  ttsSay(lastReply);
+  ttsIdle().then(() => listenAfterTurn());
+}
+export function clearConversation() {
+  interrupt();
+  stopListen();
+  pending = null;
+  clearTimeout(talkTimer);
+  setAState('');
+  store.set({ talk: { rows: [], visible: false }, search: { query: '', results: [] } });
+  if (st().assistantOn && !st().typing) scheduleListen(350);
+}
 function notify(msg) {
   // spoken announcement outside a conversation turn (timers)
   stopListen();
@@ -75,9 +91,16 @@ export async function deleteComposition(id) {
 /* ----- text box ----- */
 export function openAsk(prefill) {
   stopListen();
+  if (!prefill) interimTranscript = '';
   store.set({ typing: true, typingPrefill: prefill || '', menuOpen: false });
   setAState('typing');
   if (!prefill) renderTalk([['note', 'enter to send · esc to close']], 6000);
+}
+function fallbackToTyping(message) {
+  const draft = interimTranscript;
+  interimTranscript = '';
+  toast(message, 4500);
+  openAsk(draft);
 }
 export function closeAsk() {
   store.set({ typing: false });
@@ -99,6 +122,7 @@ export function setRecognitionLang(lang) {
   if (typeof lang !== 'string' || !/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/i.test(lang)) return false;
   recognitionLang = lang;
   lsSet('eve.recognitionLang', lang);
+  loadVoices();
   localLang = null;
   localTried = false;
   if (sr) { try { sr.abort(); } catch { /* ignore */ } sr.lang = lang; }
@@ -111,13 +135,17 @@ async function prepareLocalSpeech() {
   localTried = true;
   const opts = (lang) => ({ langs: [lang], processLocally: true });
   try {
-    for (const lang of [...new Set([recognitionLang, 'en-US'])]) {
+    const fallback = recognitionLang.toLowerCase().startsWith('en') ? ['en-US'] : [];
+    for (const lang of [...new Set([recognitionLang, ...fallback])]) {
       let a = await SR.available(opts(lang));
       if (a === 'downloadable' || a === 'downloading') {
         toast('downloading offline speech recognition…', 5000);
         if (await SR.install(opts(lang))) a = 'available';
       }
       if (a === 'available') { localLang = lang; toast('speech recognition runs offline', 3000); return; }
+    }
+    if (!recognitionLang.toLowerCase().startsWith('en')) {
+      toast(`offline recognition unavailable for ${recognitionLang}; using the selected language online`, 5000);
     }
   } catch { /* not supported: network recognition */ }
 }
@@ -223,6 +251,7 @@ function chime() {
 }
 // a final transcript from the listener: dozing, only the wake word counts
 function heard(txt) {
+  interimTranscript = '';
   const w = parseWake(txt);
   if (dozing() && !w) return false;
   stopListen();
@@ -262,6 +291,7 @@ function startListen() {
         interim += r[0].transcript;
       }
       if (!interim || dozing()) return; // dozing: nothing is shown
+      interimTranscript = interim;
       if (wakeOn) stayAwake(); // still talking: don't doze off mid-sentence
       renderTalk([['you', interim]]);
     };
@@ -270,16 +300,20 @@ function startListen() {
       listening = false;
       if (err === 'aborted') return; // onend restarts
       if (err === 'no-speech') { srRetry = Math.min(srRetry + 1, 4); return; }
-      if (err === 'not-allowed' || err === 'service-not-allowed') { toast('speech recognition blocked — typing instead', 4000); openAsk(); return; }
+      if (err === 'not-allowed' || err === 'service-not-allowed') { fallbackToTyping('speech recognition blocked — typing instead'); return; }
       if (err === 'network') {
         srRetry = Math.min(srRetry + 1, 5);
         const offlineReady = localLang && 'processLocally' in sr;
+        if (srRetry >= 3) {
+          fallbackToTyping(offlineReady ? 'speech recognition stopped — type instead' : 'speech connection failed — type instead');
+          return;
+        }
         toast(offlineReady ? 'speech connection lost — retrying' : 'speech needs an internet connection — retrying', 4500);
         return;
       }
       srErrs++;
       toast('speech (' + err + ')', 3500);
-      if (srErrs >= 3) openAsk();
+      if (srErrs >= 3) fallbackToTyping('speech recognition failed — type instead');
     };
     sr.onend = () => {
       listening = false;
@@ -375,17 +409,31 @@ export async function ask(raw) {
   }
   if (!local) {
     const query = q.replace(/^(?:(?:please )?(?:search(?: the web)?(?: for)?|look up|google|duckduckgo)\s+)/i, '').trim();
-    try {
-      const found = await api('/search?q=' + encodeURIComponent(query));
-      if (id !== turnId) return;
-      const results = Array.isArray(found?.results) ? found.results.slice(0, 5) : [];
-      store.set({ search: { query, results } });
-      local = { r: results.length
-        ? `I couldn't answer that directly. I found ${results.length} search results and displayed them below.`
-        : "I couldn't find any useful search results for that." };
-    } catch {
-      if (id !== turnId) return;
-      local = { r: "I couldn't answer that directly, and web search is unavailable right now." };
+    const explicitSearch = query !== q;
+    if (!explicitSearch && isQuestion(q, getRecognitionLang())) {
+      try {
+        const found = await api('/answer?q=' + encodeURIComponent(q) + '&lang=' + encodeURIComponent(getRecognitionLang()));
+        if (id !== turnId) return;
+        if (found?.answer?.extract) {
+          const article = found.answer;
+          store.set({ search: { query: q, results: [{ title: article.title, snippet: 'Wikipedia article', url: article.url }] } });
+          local = { r: `According to Wikipedia: ${article.extract}` };
+        }
+      } catch { /* use the regular web-search fallback below */ }
+    }
+    if (!local) {
+      try {
+        const found = await api('/search?q=' + encodeURIComponent(query));
+        if (id !== turnId) return;
+        const results = Array.isArray(found?.results) ? found.results.slice(0, 5) : [];
+        store.set({ search: { query, results } });
+        local = { r: results.length
+          ? `I couldn't answer that directly. I found ${results.length} search results and displayed them below.`
+          : "I couldn't find any useful search results for that." };
+      } catch {
+        if (id !== turnId) return;
+        local = { r: "I couldn't answer that directly, and web search is unavailable right now." };
+      }
     }
   }
   if (local && local.r === null) { turnBusy = false; setAState(''); listenAfterTurn(); return; }

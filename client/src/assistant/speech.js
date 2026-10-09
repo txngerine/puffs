@@ -45,10 +45,13 @@ export const getVoicePrefs=()=>({...voicePrefs});
 let voices=[], rankedVoices=[];
 const NOVELTY=/\b(albert|bad news|bahh|bells|boing|bubbles|cellos|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|fred|junior|ralph|grandma|grandpa|rocko|shelley|eddy|flo|reed|sandy)\b/i;
 export function voiceScore(v){
-  const want=(navigator.language||'en-US').toLowerCase();
+  const want=String(lsGet('eve.recognitionLang', navigator.language||'en-US')).toLowerCase();
   const vl=(v.lang||'').toLowerCase().replace('_','-');
-  if(!vl.startsWith('en')) return -1;            // replies are English
-  let sc=want.startsWith('en')&&vl===want?30:vl==='en-us'||vl==='en-gb'?20:10;
+  const preferred=want.split('-')[0];
+  const sameLanguage=vl.split('-')[0]===preferred;
+  const englishFallback=vl.startsWith('en');
+  if(!sameLanguage&&!englishFallback) return -1;
+  let sc=sameLanguage?(vl===want?45:35):vl==='en-us'||vl==='en-gb'?15:8;
   if(/natural|neural/i.test(v.name)) sc+=60;      // Edge / Windows neural voices
   if(/premium|enhanced|siri/i.test(v.name)) sc+=45; // Apple downloaded high-quality voices
   if(/^google/i.test(v.name)) sc+=35;             // Chrome's network voices

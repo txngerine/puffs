@@ -33,6 +33,18 @@ describe('voice ranking', () => {
     expect(ranked).not.toContain('Deutsch');
     expect(ranked).not.toContain('Albert'); // novelty voices are excluded, not just ranked low
   });
+  it('prefers a voice matching the selected Malayalam recognition language', () => {
+    const original = globalThis.localStorage;
+    const values = new Map([['eve.recognitionLang', '"ml-IN"']]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key) => values.has(key) ? values.get(key) : null,
+      setItem: (key, value) => values.set(key, value),
+      removeItem: (key) => values.delete(key),
+    });
+    try {
+      expect(voiceScore(v('Malayalam voice', 'ml-IN'))).toBeGreaterThan(voiceScore(v('English voice', 'en-IN')));
+    } finally { vi.stubGlobal('localStorage', original); }
+  });
 });
 
 describe('barge-in', () => {

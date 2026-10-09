@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
@@ -41,6 +41,29 @@ describe('health and identity', () => {
   it('answers malformed JSON with 400', async () => {
     const r = await as(request(appWith()).put('/api/memory')).set('Content-Type', 'application/json').send('{oops');
     expect(r.status).toBe(400);
+  });
+});
+
+describe('Wikipedia answers', () => {
+  it('returns a concise article extract in the selected language', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ query: { search: [{ title: 'കേരളം' }] } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ title: 'കേരളം', extract: 'കേരളം ഇന്ത്യയിലെ ഒരു സംസ്ഥാനമാണ്.', content_urls: { desktop: { page: 'https://ml.wikipedia.org/wiki/Kerala' } } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const r = await as(request(appWith()).get('/api/answer?q=കേരളം&lang=ml-IN'));
+      expect(r.status).toBe(200);
+      expect(r.body.answer).toMatchObject({ title: 'കേരളം', extract: 'കേരളം ഇന്ത്യയിലെ ഒരു സംസ്ഥാനമാണ്.', url: 'https://ml.wikipedia.org/wiki/Kerala' });
+      expect(String(fetchMock.mock.calls[0][0])).toContain('ml.wikipedia.org');
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it('returns no answer when Wikipedia has no matching article', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ query: { search: [] } }), { status: 200 })));
+    try {
+      const r = await as(request(appWith()).get('/api/answer?q=unmatched'));
+      expect(r.status).toBe(200);
+      expect(r.body.answer).toBeNull();
+    } finally { vi.unstubAllGlobals(); }
   });
 });
 

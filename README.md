@@ -167,7 +167,10 @@ it say?"), reads the message back, and sends it when you say "yes". Say "change 
 1. **Follow-ups.** If Eve just asked something ("For how long?"), your answer completes that request.
 2. **Local rules.** Commands and questions it knows ("pause", "15% of 80", "set a timer for 5 minutes", "what time is it",
    "good morning") are matched by Eve's own rules. Greetings follow the time of day.
-3. **Anything else** gets a polite "Sorry, I can't help with that yet", and "help" lists what Eve can do.
+3. **Factual questions** try a short Wikipedia article extract in the selected speech language, with a link to the article.
+   If no article is available, Eve falls back to up to five DuckDuckGo results. Explicit "search for…" requests go
+   straight to those results. Eve does not invent a synthesized answer from links.
+4. **Other unsupported requests** get a polite "Sorry, I can't help with that yet", and "help" lists what Eve can do.
 
 **Wake word ("hey Eve").** Press W or say "turn on the wake word". Eve then waits quietly and ignores
 everything until it hears "hey Eve" or "ok Eve". Say the request in the same breath ("hey Eve, set a timer for
@@ -186,4 +189,6 @@ hears with what it just said. Headphones still work best. Say "turn off interrup
 URL parameters: `?seed=1337` / `?seed=random`, `?motion=0|1`, `?capture=1` (records on load), `?debug=1` (exposes `window.__eve`), `?particles=cpu`.
 
 Privacy: browser speech recognition is not offline. Chrome and Edge send microphone audio to their own
-cloud speech services while listening. If recognition is unavailable, a text box opens instead.
+cloud speech services while listening. Factual question text and explicit search queries are sent to Eve's server,
+which requests Wikipedia or DuckDuckGo; the query is not added to Eve's saved memory. If recognition is unavailable,
+a text box opens instead. The Android app remains offline and does not provide web or Wikipedia answers.

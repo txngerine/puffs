@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useStore } from '../lib/store.js';
-import { ask, escapeAsk } from '../assistant/assistant.js';
+import { ask, escapeAsk, replayLastReply, clearConversation } from '../assistant/assistant.js';
+import { toast } from '../lib/store.js';
 
 const LABELS = { listening: 'listening', thinking: 'thinking', speaking: 'speaking' };
 
@@ -22,6 +23,7 @@ export default function Talk() {
   // while typing the text box itself is the indicator
   const stateOn = aState !== 'typing' && (assistantOn || !!aState);
   const on = typing || stateOn || talk.visible;
+  const answer = [...talk.rows].reverse().find(([who]) => who === 'eve')?.[1] || '';
   return (
     <div id="talk" className={on ? 'on' : ''}>
       <div id="state" data-s={aState} className={stateOn ? 'on' : ''}>
@@ -48,6 +50,11 @@ export default function Talk() {
             ))}
           </ol>
         )}
+        {talk.visible && answer && <div className="talkActions" aria-label="Response actions">
+          <button type="button" onClick={() => navigator.clipboard?.writeText(answer).then(() => toast('answer copied')).catch(() => toast('could not copy answer'))}>copy</button>
+          <button type="button" onClick={replayLastReply}>replay</button>
+          <button type="button" onClick={clearConversation}>clear</button>
+        </div>}
       </div>
       <input
         id="ask" ref={input} type="text" autoComplete="off" autoCapitalize="off" spellCheck={false}

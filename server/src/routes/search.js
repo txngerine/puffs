@@ -2,6 +2,34 @@ import { Router } from 'express';
 
 export const search = Router();
 
+const wikiLanguage = (value) => {
+  const code = String(value || '').toLowerCase().split('-')[0];
+  return /^[a-z]{2,3}$/.test(code) ? code : 'en';
+};
+
+search.get('/answer', async (req, res) => {
+  const query = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 240) : '';
+  if (!query) return res.status(400).json({ error: 'a question is required' });
+  const lang = wikiLanguage(req.query.lang);
+  try {
+    const endpoint = new URL(`https://${lang}.wikipedia.org/w/api.php`);
+    endpoint.search = new URLSearchParams({ action: 'query', list: 'search', srsearch: query, srlimit: '1', format: 'json', origin: '*' });
+    const found = await fetch(endpoint, { headers: { 'User-Agent': 'EveAssistant/1.0 (Wikipedia answer lookup)' }, signal: AbortSignal.timeout(7000) });
+    if (!found.ok) return res.status(502).json({ error: 'Wikipedia lookup failed' });
+    const title = (await found.json()).query?.search?.[0]?.title;
+    if (!title) return res.json({ query, answer: null });
+    const summaryUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, '_'))}`;
+    const summaryResponse = await fetch(summaryUrl, { headers: { 'User-Agent': 'EveAssistant/1.0 (Wikipedia answer lookup)', Accept: 'application/json' }, signal: AbortSignal.timeout(7000) });
+    if (!summaryResponse.ok) return res.json({ query, answer: null });
+    const summary = await summaryResponse.json();
+    const extract = typeof summary.extract === 'string' ? summary.extract.trim().slice(0, 1800) : '';
+    const article = summary.content_urls?.desktop?.page || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
+    res.json({ query, answer: extract ? { title: summary.title || title, extract, url: article } : null });
+  } catch {
+    res.status(503).json({ error: 'Wikipedia is unavailable right now' });
+  }
+});
+
 const decodeHtml = (s) => s
   .replace(/<[^>]*>/g, ' ')
   .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
