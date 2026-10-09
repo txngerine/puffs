@@ -1,9 +1,9 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Puffs</string>
-    <string name="title_activity_main">Puffs</string>
-    <string name="package_name">com.codecarrots.puffs</string>
-    <string name="custom_url_scheme">com.codecarrots.puffs</string>
-    <string name="send_service_label">Puffs auto-send</string>
-    <string name="send_service_description">Lets Puffs tap Send in WhatsApp for a message you just confirmed by voice. It only acts for a few seconds after you say yes, and only inside WhatsApp.</string>
+    <string name="app_name">Eve</string>
+    <string name="title_activity_main">Eve</string>
+    <string name="package_name">com.codecarrots.eve</string>
+    <string name="custom_url_scheme">com.codecarrots.eve</string>
+    <string name="send_service_label">Eve auto-send</string>
+    <string name="send_service_description">Lets Eve tap Send in WhatsApp for a message you just confirmed by voice. It only acts for a few seconds after you say yes, and only inside WhatsApp.</string>
 </resources>

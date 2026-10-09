@@ -17,6 +17,6 @@ export default defineConfig({
     url: `http://localhost:${PORT}/api/health`,
     timeout: 180_000,
     reuseExistingServer: false,
-    env: { PORT: String(PORT), PUFFS_EPHEMERAL_DB: '1', CLAUDE: 'off' },
+    env: { PORT: String(PORT), EVE_EPHEMERAL_DB: '1' },
   },
 });

@@ -15,7 +15,7 @@ test.afterEach(async ({ page }) => {
 
 test('renders the artwork with GPU particles', async ({ page }) => {
   await page.goto('/?motion=1&debug=1');
-  await expect.poll(() => page.evaluate(() => window.__puffs?.engine.getState().gpuParticles)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__eve?.engine.getState().gpuParticles)).toBe(true);
   // the field is actually drawn: some non-black pixels in the WebGL canvas
   const lit = await page.evaluate(() => {
     const c = document.getElementById('gl');

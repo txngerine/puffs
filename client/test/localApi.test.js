@@ -25,7 +25,7 @@ describe('on-phone storage (Android app)', () => {
     await localApi('/compositions/' + c.id, { method: 'DELETE' });
     expect(await localApi('/compositions')).toEqual([]);
   });
-  it('has no Claude or Mac routes', async () => {
-    await expect(localApi('/assistant/understand', { method: 'POST' })).rejects.toMatchObject({ status: 503, kind: 'off' });
+  it('has no Mac routes', async () => {
+    await expect(localApi('/device/open', { method: 'POST' })).rejects.toMatchObject({ status: 503, kind: 'off' });
   });
 });

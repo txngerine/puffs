@@ -32,5 +32,5 @@ console.log('\nAPK: ' + apk);
 if (process.argv.includes('--run')) {
   const adb = join(sdk, 'platform-tools/adb');
   run(adb, ['install', '-r', apk]);
-  run(adb, ['shell', 'am', 'start', '-n', 'com.codecarrots.puffs/.MainActivity']);
+  run(adb, ['shell', 'am', 'start', '-n', 'com.codecarrots.eve/.MainActivity']);
 }

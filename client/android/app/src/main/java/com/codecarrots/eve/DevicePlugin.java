@@ -1,4 +1,4 @@
-package com.codecarrots.puffs;
+package com.codecarrots.eve;
 
 import android.Manifest;
 import android.content.ComponentName;
@@ -26,7 +26,7 @@ import java.util.Locale;
 
 /** Phone actions: open apps, find contacts, send WhatsApp messages. All of it works offline. */
 @CapacitorPlugin(
-    name = "PuffsDevice",
+    name = "EveDevice",
     permissions = @Permission(alias = "contacts", strings = { Manifest.permission.READ_CONTACTS })
 )
 public class DevicePlugin extends Plugin {

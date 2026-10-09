@@ -3,18 +3,17 @@ import request from 'supertest';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import { createApp } from '../src/app.js';
-import { Composition, Usage, MAX_COMPOSITIONS } from '../src/models/index.js';
-import { sanitizeFrame, INTENTS } from '../src/assistant/understand.js';
+import { Composition, MAX_COMPOSITIONS } from '../src/models/index.js';
 
 let mongo;
-const base = { production: false, port: 0, trustProxy: 0, accessPassword: '', deviceDailyTokens: 1000, globalDailyTokens: 100000, chatPerMinute: 50 };
+const base = { production: false, port: 0, trustProxy: 0 };
 const appWith = (over = {}) => createApp({ ...base, ...over }, { serveClient: false });
 const DEV = 'test-device-0001';
-const as = (req) => req.set('x-puffs-device', DEV);
+const as = (req) => req.set('x-eve-device', DEV);
 
 beforeAll(async () => {
   mongo = await MongoMemoryServer.create();
-  await mongoose.connect(mongo.getUri('puffs-test'));
+  await mongoose.connect(mongo.getUri('eve-test'));
 });
 afterAll(async () => {
   await mongoose.disconnect();
@@ -22,18 +21,17 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await mongoose.connection.db.dropDatabase();
-  delete process.env.ANTHROPIC_API_KEY;
 });
 
 describe('health and identity', () => {
   it('reports status without a device id', async () => {
     const r = await request(appWith()).get('/api/health');
     expect(r.status).toBe(200);
-    expect(r.body).toMatchObject({ ok: true, claude: false, locked: false });
+    expect(r.body).toMatchObject({ ok: true });
   });
   it('rejects data routes without a valid device id', async () => {
     expect((await request(appWith()).get('/api/memory')).status).toBe(400);
-    expect((await request(appWith()).get('/api/memory').set('x-puffs-device', 'bad id!')).status).toBe(400);
+    expect((await request(appWith()).get('/api/memory').set('x-eve-device', 'bad id!')).status).toBe(400);
   });
   it('sets security headers', async () => {
     const r = await request(appWith()).get('/api/health');
@@ -54,7 +52,7 @@ describe('memory and settings', () => {
     expect(put.body.name).toBe('Sam');
     expect(put.body.facts).toHaveLength(30);
     expect(put.body.facts.at(-1)).toBe('fact 39');
-    const other = await request(app).get('/api/memory').set('x-puffs-device', 'other-device-01');
+    const other = await request(app).get('/api/memory').set('x-eve-device', 'other-device-01');
     expect(other.body).toEqual({ name: '', facts: [], contacts: [] });
     expect((await as(request(app).delete('/api/memory'))).body).toEqual({ name: '', facts: [], contacts: [] });
   });
@@ -95,62 +93,8 @@ describe('abuse protection', () => {
     expect(last.status).toBe(429);
     expect(last.headers['retry-after']).toBeDefined();
   });
-  it('requires the access password for Claude routes when set', async () => {
-    const app = appWith({ accessPassword: 'correct horse' });
-    expect((await as(request(app).post('/api/assistant/unlock'))).status).toBe(401);
-    expect((await as(request(app).post('/api/assistant/unlock')).set('x-puffs-access', 'wrong')).status).toBe(401);
-    expect((await as(request(app).post('/api/assistant/unlock')).set('x-puffs-access', 'correct horse')).status).toBe(204);
-    expect((await as(request(app).post('/api/assistant/chat')).send({ message: 'hi' })).status).toBe(401);
-    expect((await request(app).get('/api/health')).body.locked).toBe(true);
-  });
-  it('returns 503 when Claude is not configured', async () => {
-    const r = await as(request(appWith()).post('/api/assistant/chat')).send({ message: 'hi' });
-    expect(r.status).toBe(503);
-  });
-  it('stops spending once the daily device budget is used', async () => {
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-never-called';
-    await Usage.create({ key: DEV, day: new Date().toISOString().slice(0, 10), tokens: 1000 });
-    const r = await as(request(appWith()).post('/api/assistant/chat')).send({ message: 'hi' });
-    expect(r.status).toBe(429);
-    expect(r.body.kind).toBe('budget');
-  });
-  it('rate-limits chat per device', async () => {
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-never-called';
-    const app = appWith({ chatPerMinute: 2, deviceDailyTokens: 1000 });
-    await Usage.create({ key: DEV, day: new Date().toISOString().slice(0, 10), tokens: 5000 }); // budget answers before Anthropic is called
-    const kinds = [];
-    for (let i = 0; i < 3; i++) kinds.push((await as(request(app).post('/api/assistant/chat')).send({ message: 'hi' })).body.kind);
-    expect(kinds).toEqual(['budget', 'budget', 'rate']); // the third request never reaches the budget check
-  });
-  it('validates chat input', async () => {
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-never-called';
-    expect((await as(request(appWith()).post('/api/assistant/chat')).send({ message: '' })).status).toBe(400);
-  });
-});
-
-describe('understanding (small model)', () => {
-  it('is unavailable without an Anthropic key', async () => {
-    expect((await as(request(appWith()).post('/api/assistant/understand')).send({ text: 'chill it out' })).status).toBe(503);
-    expect((await request(appWith()).get('/api/health')).body.understand).toBeNull();
-  });
-  it('validates input, honours the password and the budget', async () => {
-    process.env.ANTHROPIC_API_KEY = 'sk-ant-test-never-called';
-    expect((await as(request(appWith()).post('/api/assistant/understand')).send({ text: '' })).status).toBe(400);
-    expect((await as(request(appWith({ accessPassword: 'correct horse' })).post('/api/assistant/understand')).send({ text: 'hi' })).status).toBe(401);
-    await Usage.create({ key: DEV, day: new Date().toISOString().slice(0, 10), tokens: 5000 });
-    const r = await as(request(appWith()).post('/api/assistant/understand')).send({ text: 'chill it out' });
-    expect(r.status).toBe(429);
-    expect(r.body.kind).toBe('budget');
-    expect((await request(appWith()).get('/api/health')).body.understand).toBe('claude-haiku-5-5');
-  });
-  it('sanitizes frames before the browser acts on them', () => {
-    expect(sanitizeFrame({ intent: 'rm -rf', slots: {} })).toBeNull();
-    expect(sanitizeFrame(null)).toBeNull();
-    const f = sanitizeFrame({ intent: 'timer_set', slots: { seconds: 300, label: '  pasta ', seed: 'x', count: 2.7 }, follow_up: '' });
-    expect(f.intent).toBe('timer_set');
-    expect(f.slots).toMatchObject({ seconds: 300, label: 'pasta', seed: null, count: 3, timezone: null });
-    expect(f.follow_up).toBeNull();
-    expect(INTENTS).toContain('question');
+  it('has no AI assistant routes', async () => {
+    expect((await as(request(appWith()).post('/api/assistant/chat')).send({ message: 'hi' })).status).toBe(404);
   });
 });
 

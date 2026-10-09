@@ -4,9 +4,9 @@ import SystemStack from './components/SystemStack.jsx';
 import Talk from './components/Talk.jsx';
 import Controls from './components/Controls.jsx';
 import HelpPanel from './components/HelpPanel.jsx';
-import { store, ui, useStore } from './lib/store.js';
+import { store, ui, useStore, toast } from './lib/store.js';
 import { toMic, loadFile, toggleAudio, reseed, startCapture, snapshot, setPaused, getState } from './engine/engine.js';
-import { toggleAssistant, openAsk, escapeTalk, loadServerState } from './assistant/assistant.js';
+import { toggleAssistant, openAsk, escapeTalk, loadServerState, setWake, wakeEnabled } from './assistant/assistant.js';
 
 export default function App() {
   const fileInput = useRef(null);
@@ -29,7 +29,8 @@ export default function App() {
     if (s.helpOpen) return;
     const handlers = {
       m: () => toMic(), f: () => fileInput.current?.click(), r: reseed, g: startCapture, p: snapshot,
-      l: () => setPaused(!getState().paused), v: toggleAssistant, t: () => openAsk(), ' ': toggleAudio,
+      l: () => setPaused(!getState().paused), v: () => toggleAssistant(), t: () => openAsk(), ' ': toggleAudio,
+      w: () => toast(setWake(!wakeEnabled()) ? 'wake word on — say “hey eve”' : s.wake ? 'wake word off — always listening while on' : 'wake word needs Chrome or Edge speech recognition', 4000),
     };
     if (!handlers[k]) return;
     if ('mfvt '.includes(k)) e?.preventDefault();
@@ -40,6 +41,8 @@ export default function App() {
   useEffect(() => {
     ui.pickFile = () => fileInput.current?.click();
     loadServerState();
+    // with the wake word on, Eve starts waiting for "hey Eve" as soon as the page opens
+    if (wakeEnabled() && !store.get().assistantOn) toggleAssistant({ asleep: true });
     const t = setTimeout(() => setFresh(false), 9000);
 
     const onKey = (e) => {
@@ -62,6 +65,17 @@ export default function App() {
     window.addEventListener('dragover', over);
     window.addEventListener('dragleave', leave);
     window.addEventListener('drop', drop);
+    // the glass panels pick up a soft light that trails the mouse (fine pointers, motion allowed)
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const fine = matchMedia('(pointer: fine)').matches;
+    const glow = fine && !still
+      ? (ev) => {
+        const s = document.documentElement.style;
+        s.setProperty('--mx', ev.clientX + 'px');
+        s.setProperty('--my', ev.clientY + 'px');
+      }
+      : null;
+    if (glow) window.addEventListener('pointermove', glow, { passive: true });
     return () => {
       clearTimeout(t);
       window.removeEventListener('keydown', onKey);
@@ -69,6 +83,7 @@ export default function App() {
       window.removeEventListener('dragover', over);
       window.removeEventListener('dragleave', leave);
       window.removeEventListener('drop', drop);
+      if (glow) window.removeEventListener('pointermove', glow);
     };
     // act reads live state from the store, so the listener never goes stale
   }, []);
@@ -76,6 +91,8 @@ export default function App() {
   return (
     <div id="stage" onPointerDown={(e) => { if (e.target.tagName === 'CANVAS') store.set({ menuOpen: false }); }}>
       <Stage />
+      <div id="aura" aria-hidden="true" />
+      <div id="brand" aria-hidden="true">✦ eve</div>
       <div id="drop" style={{ display: dragging ? 'grid' : 'none' }}>DROP AUDIO FILE</div>
       <SystemStack />
       <Talk />

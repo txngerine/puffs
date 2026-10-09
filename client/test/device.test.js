@@ -14,7 +14,7 @@ const MOM = { name: 'Mom', phone: '+919876543210' };
 const ctx = { setMemory: vi.fn((p) => store.set({ memory: { ...store.get().memory, ...p } })) };
 beforeEach(() => {
   api.mockReset(); window.open.mockReset(); ctx.setMemory.mockClear();
-  store.set({ claude: false, memory: { name: '', facts: [], contacts: [MOM] } });
+  store.set({ memory: { name: '', facts: [], contacts: [MOM] } });
 });
 
 describe('understanding message requests', () => {

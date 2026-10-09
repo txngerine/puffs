@@ -33,7 +33,7 @@ function recipient(to) {
 }
 export function parseMessage(raw) {
   let s = tidy(raw).replace(/[.?!]+$/, '');
-  s = s.replace(/^(?:hey |ok |okay )?(?:puffs[, ]+)?/i, '')
+  s = s.replace(/^(?:hey |ok |okay )?(?:eve[, ]+)?/i, '')
     .replace(/^(?:please\s+|can you\s+|could you\s+|would you\s+|i want to\s+|i need to\s+)+/i, '');
   let via = false;
   s = s.replace(new RegExp(`^(?:(?:go to|open|launch)\\s+${WA}\\s+(?:and\\s+)?|${VIA}[, ]+)`, 'i'), () => { via = true; return ''; });
@@ -83,15 +83,15 @@ export function parseOpenApp(raw) {
   return /^what'?s ?app$/i.test(app) ? 'WhatsApp' : app;
 }
 
-/* ----- "turn on auto send": the one setting that lets Puffs tap send by itself ----- */
+/* ----- "turn on auto send": the one setting that lets Eve tap send by itself ----- */
 export const isAutoSendRequest = (raw) => /\b(?:turn on|enable|set up|allow|switch on)\s+(?:the\s+)?(?:auto(?:matic)?[ -]?send(?:ing)?|whats ?app auto[ -]?send)\b/i.test(raw);
 export async function enableAutoSend() {
   if (!isNative) return { r: 'On a Mac, allow your terminal app in System Settings, Privacy and Security, Accessibility. Then I can press send for you.' };
   await Device.openAutoSendSettings().catch(() => {});
-  return { r: 'Opening Accessibility settings. Tap Puffs auto-send and turn it on. It only taps send right after you say yes to a message.' };
+  return { r: 'Opening Accessibility settings. Tap Eve auto-send and turn it on. It only taps send right after you say yes to a message.' };
 }
 
-/* ----- contacts: Puffs' own list first, then the Mac's Contacts app ----- */
+/* ----- contacts: Eve's own list first, then the Mac's Contacts app ----- */
 function savedContact(name) {
   const q = name.toLowerCase();
   const list = store.get().memory.contacts || [];
@@ -202,6 +202,6 @@ export async function openApp(app) {
     if (e.kind === 'missing') return { r: `I couldn't find an app called ${app} on this ${isNative ? 'phone' : 'Mac'}.` };
     if (isNative) return { r: "I couldn't open it." };
     if (/^whatsapp$/i.test(app)) { window.open('https://web.whatsapp.com/', '_blank', 'noopener'); return { r: 'Opening WhatsApp Web.' }; }
-    return { r: e.kind === 'remote' ? 'I can only open apps on the computer running Puffs.' : "I can't open apps right now. Is the Puffs server running on this Mac?" };
+    return { r: e.kind === 'remote' ? 'I can only open apps on the computer running Eve.' : "I can't open apps right now. Is the Eve server running on this Mac?" };
   }
 }

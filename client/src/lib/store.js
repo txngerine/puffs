@@ -7,12 +7,12 @@ const state = {
   talk: { rows: [], visible: false },
   aState: '',           // listening | thinking | speaking | typing | ''
   assistantOn: false,
+  wake: false,          // wake word on: Eve waits for "hey Eve"
+  asleep: false,        // waiting for the wake word right now
   typing: false,
   typingPrefill: '',
   helpOpen: false,
   menuOpen: false,
-  claude: false,        // Claude configured on the server
-  locked: false,        // server requires an access password for Claude
   server: 'unknown',    // ok | offline | unknown
   memory: { name: '', facts: [], contacts: [] },
   saved: [],            // saved compositions

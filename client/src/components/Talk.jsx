@@ -11,7 +11,7 @@ export default function Talk() {
   const assistantOn = useStore((s) => s.assistantOn);
   const typing = useStore((s) => s.typing);
   const prefill = useStore((s) => s.typingPrefill);
-  const claude = useStore((s) => s.claude);
+  const asleep = useStore((s) => s.asleep);
   const input = useRef(null);
 
   useEffect(() => {
@@ -25,12 +25,11 @@ export default function Talk() {
     <div id="talk" className={on ? 'on' : ''}>
       <div id="state" data-s={aState} className={stateOn ? 'on' : ''}>
         <span className="dot" />
-        <span className="lbl">{LABELS[aState] || (assistantOn ? 'ready' : '')}</span>
-        <span className="brain">{claude ? 'claude' : 'offline'}</span>
+        <span className="lbl">{LABELS[aState] || (assistantOn ? (asleep ? 'say “hey eve”' : 'ready') : '')}</span>
       </div>
       <div id="say" className={talk.visible ? 'on' : ''} aria-live="polite">
         {talk.rows.map(([who, text], i) => (
-          <div key={i} className={'line ' + ({ you: 'u', puffs: 'a' }[who] || 'n')}>
+          <div key={i} className={'line ' + ({ you: 'u', eve: 'a' }[who] || 'n')}>
             <span className="who">{who === 'note' ? '' : who}</span>
             <span>{text}</span>
           </div>
@@ -39,7 +38,7 @@ export default function Talk() {
       <input
         id="ask" ref={input} type="text" autoComplete="off" autoCapitalize="off" spellCheck={false}
         style={{ display: typing ? 'block' : 'none' }}
-        placeholder={claude ? 'ask puffs anything…' : 'ask puffs…'}
+        placeholder="ask eve…"
         onKeyDown={(e) => {
           e.stopPropagation();
           if (e.key === 'Enter') { const v = e.currentTarget.value; e.currentTarget.value = ''; ask(v); }

@@ -12,7 +12,7 @@ export function deviceRoutes(config) {
   const enabled = () => config.localActions && mac.supported();
   r.use((req, res, next) => {
     if (!enabled()) return res.status(503).json({ error: 'device actions are off on this server', kind: 'off' });
-    if (!LOOPBACK.test(req.socket.remoteAddress || '')) return res.status(403).json({ error: 'device actions only work on the computer running Puffs', kind: 'remote' });
+    if (!LOOPBACK.test(req.socket.remoteAddress || '')) return res.status(403).json({ error: 'device actions only work on the computer running Eve', kind: 'remote' });
     next();
   });
 

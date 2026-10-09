@@ -1,4 +1,4 @@
-package com.codecarrots.puffs;
+package com.codecarrots.eve;
 
 import android.Manifest;
 import android.content.Intent;
@@ -25,7 +25,7 @@ import java.util.Locale;
  * so listening works without internet. Events mirror the Web Speech API: result, error, end.
  */
 @CapacitorPlugin(
-    name = "PuffsSpeech",
+    name = "EveSpeech",
     permissions = @Permission(alias = "microphone", strings = { Manifest.permission.RECORD_AUDIO })
 )
 public class SpeechPlugin extends Plugin {

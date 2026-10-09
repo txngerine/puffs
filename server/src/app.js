@@ -4,11 +4,8 @@ import mongoose from 'mongoose';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { data } from './routes/data.js';
-import { assistantRoutes } from './routes/assistant.js';
 import { deviceRoutes } from './routes/device.js';
 import { supported as deviceSupported } from './device/mac.js';
-import { claudeEnabled, MODEL } from './assistant/claude.js';
-import { UNDERSTAND_MODEL } from './assistant/understand.js';
 import { rateLimit } from './middleware/limits.js';
 import { log, requestLog } from './logger.js';
 
@@ -40,8 +37,7 @@ export function createApp(config, { dbMode = () => 'unknown', serveClient = true
   app.get('/api/health', (req, res) => {
     const db = mongoose.connection.readyState === 1;
     res.status(db ? 200 : 503).json({
-      ok: db, db: db ? dbMode() : 'down', claude: claudeEnabled(),
-      model: claudeEnabled() ? MODEL : null, understand: claudeEnabled() ? UNDERSTAND_MODEL : null, locked: Boolean(config.accessPassword),
+      ok: db, db: db ? dbMode() : 'down',
       device: Boolean(config.localActions) && deviceSupported(),
     });
   });
@@ -49,15 +45,14 @@ export function createApp(config, { dbMode = () => 'unknown', serveClient = true
   app.use('/api', rateLimit({ windowMs: 60_000, max: 300, key: (req) => 'api:' + req.ip }));
   // Anonymous per-browser identity: every data route is scoped to this id.
   app.use('/api', (req, res, next) => {
-    const id = req.get('x-puffs-device');
-    if (!id || !/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'missing or invalid x-puffs-device header' });
+    const id = req.get('x-eve-device');
+    if (!id || !/^[A-Za-z0-9-]{8,64}$/.test(id)) return res.status(400).json({ error: 'missing or invalid x-eve-device header' });
     req.deviceId = id;
     next();
   });
   const writes = rateLimit({ windowMs: 60_000, max: 60, key: (req) => 'w:' + req.deviceId });
   app.use('/api', (req, res, next) => (req.method === 'GET' ? next() : writes(req, res, next)));
   app.use('/api', data);
-  app.use('/api/assistant', assistantRoutes(config));
   app.use('/api/device', deviceRoutes(config));
   app.use('/api', (req, res) => res.status(404).json({ error: 'not found' }));
 

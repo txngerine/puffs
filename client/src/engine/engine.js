@@ -652,7 +652,7 @@ function drawMark(g){
   g.save();
   g.translate(W*0.5,H-H*0.023-20*HS);
   g.transform(1,0,Math.tan(-4*Math.PI/180),1,0,0);
-  g.fillText('PUFFS',0,0);
+  g.fillText('EVE',0,0);
   g.restore();
 }
 function drawHUD(){
@@ -715,7 +715,7 @@ function beginRec(){
       const ext=type.indexOf('mp4')>=0?'mp4':'webm';
       const a=document.createElement('a');
       a.href=URL.createObjectURL(blob);
-      a.download='puffs-'+seed.toString(16)+'-5s.'+ext;
+      a.download='eve-'+seed.toString(16)+'-5s.'+ext;
       a.click();
       setTimeout(()=>URL.revokeObjectURL(a.href),8000);
       say('SAVED '+a.download,4500);
@@ -764,14 +764,14 @@ export function snapshot(){
   t.toBlob(b=>{
     const a=document.createElement('a');
     a.href=URL.createObjectURL(b);
-    a.download='puffs-'+seed.toString(16)+'.png';
+    a.download='eve-'+seed.toString(16)+'.png';
     a.click();
     setTimeout(()=>URL.revokeObjectURL(a.href),8000);
     say('SAVED '+a.download);
   },'image/png');
 }
 
-/* ===== shared actions (keyboard, buttons, local brain and Claude tools all use these) ===== */
+/* ===== shared actions (keyboard, buttons and the assistant all use these) ===== */
 export function setPaused(p){
   if(p&&recording()){ say('recording — pause blocked'); return "I can't pause while a loop is recording. It finishes in a few seconds."; }
   paused=p; last=performance.now();
@@ -825,7 +825,7 @@ function resize(){
   SC=Math.min(W/720,H/900);
   HS=Math.max(1,Math.min(2,SC));
   FW=Math.min(W,H*0.8); FX=(W-FW)/2;
-  // conversation sits above the PUFFS mark unless the screen is wide enough to sit beside it
+  // conversation sits above the EVE mark unless the screen is wide enough to sit beside it
   const besideMark=W/2-60*HS>584;
   const besideStrip=W-(FX+FW*0.92)>270;
   document.documentElement.style.setProperty('--sys-top',(besideStrip?10:Math.round(H*0.164+20*HS))+'px');

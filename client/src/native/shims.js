@@ -1,4 +1,4 @@
-// Android's WebView has no Web Speech API. In the app, these stand-ins give the rest of Puffs the same
+// Android's WebView has no Web Speech API. In the app, these stand-ins give the rest of Eve the same
 // SpeechRecognition and speechSynthesis interfaces, backed by Android's own recognizer and voice.
 // Imported first in main.jsx, before anything reads those globals.
 import { isNative, Speech, Tts } from './native.js';

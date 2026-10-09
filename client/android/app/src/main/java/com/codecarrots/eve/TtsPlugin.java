@@ -1,4 +1,4 @@
-package com.codecarrots.puffs;
+package com.codecarrots.eve;
 
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Locale;
 
 /** Text to speech with the phone's own engine; voices that need no network work offline. */
-@CapacitorPlugin(name = "PuffsTts")
+@CapacitorPlugin(name = "EveTts")
 public class TtsPlugin extends Plugin {
     private TextToSpeech tts;
     private boolean ready;

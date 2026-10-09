@@ -15,11 +15,7 @@ services:
     ports:
       - "5050:5050"
     environment:
-      MONGODB_URI: mongodb://mongo:27017/puffs
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ACCESS_PASSWORD: ${ACCESS_PASSWORD:-}
-      DEVICE_DAILY_TOKENS: ${DEVICE_DAILY_TOKENS:-150000}
-      DAILY_TOKEN_BUDGET: ${DAILY_TOKEN_BUDGET:-2000000}
+      MONGODB_URI: mongodb://mongo:27017/eve
     depends_on:
       mongo:
         condition: service_healthy

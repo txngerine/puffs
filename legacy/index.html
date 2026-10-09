@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-<title>Puffs — Realtime Spectrogram</title>
+<title>Eve — Realtime Spectrogram</title>
 <style>
   :root{--mono:ui-monospace,SFMono-Regular,Menlo,monospace;--dim:#8c8c8c;--faint:#5f5f5f;--panel:rgba(0,0,0,.66);--edge:#353535;--talk-bottom:64px;--sys-top:10px}
   *{box-sizing:border-box}
@@ -105,7 +105,7 @@
   <div id="talk">
     <div id="state"><span class="dot"></span><span class="lbl"></span><span class="brain"></span></div>
     <div id="say" aria-live="polite"></div>
-    <input id="ask" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ask puffs…"/>
+    <input id="ask" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ask eve…"/>
   </div>
   <div id="hint" class="fresh"><span><kbd>V</kbd>talk</span><span><kbd>?</kbd>controls</span></div>
   <div id="bar" role="toolbar" aria-label="Controls">
@@ -131,12 +131,12 @@
   <button id="menu" class="btn" aria-expanded="false" aria-controls="bar">controls</button>
   <div id="help" role="dialog" aria-modal="true" aria-labelledby="helpT">
     <div class="card">
-      <div class="head"><h2 id="helpT">PUFFS</h2><button class="btn" id="helpX">close<kbd>esc</kbd></button></div>
+      <div class="head"><h2 id="helpT">EVE</h2><button class="btn" id="helpX">close<kbd>esc</kbd></button></div>
       <p>A realtime spectrogram that loops every five seconds, with a voice assistant built in.</p>
       <h3>Keys</h3>
       <dl>
-        <dt><kbd>V</kbd></dt><dd>talk to puffs, hands-free</dd>
-        <dt><kbd>T</kbd></dt><dd>type to puffs instead</dd>
+        <dt><kbd>V</kbd></dt><dd>talk to eve, hands-free</dd>
+        <dt><kbd>T</kbd></dt><dd>type to eve instead</dd>
         <dt><kbd>esc</kbd></dt><dd>interrupt / close</dd>
         <dt><kbd>M</kbd> <kbd>F</kbd></dt><dd>microphone / audio file (or drop one anywhere)</dd>
         <dt><kbd>space</kbd></dt><dd>live audio on or off</dd>
@@ -690,7 +690,7 @@ function drawMark(g){
   g.save();
   g.translate(W*0.5,H-H*0.023-20*HS);
   g.transform(1,0,Math.tan(-4*Math.PI/180),1,0,0);
-  g.fillText('PUFFS',0,0);
+  g.fillText('EVE',0,0);
   g.restore();
 }
 function drawHUD(){
@@ -753,7 +753,7 @@ function beginRec(){
       const ext=type.indexOf('mp4')>=0?'mp4':'webm';
       const a=document.createElement('a');
       a.href=URL.createObjectURL(blob);
-      a.download='puffs-'+seed.toString(16)+'-5s.'+ext;
+      a.download='eve-'+seed.toString(16)+'-5s.'+ext;
       a.click();
       setTimeout(()=>URL.revokeObjectURL(a.href),8000);
       say('SAVED '+a.download,4500);
@@ -802,7 +802,7 @@ function snapshot(){
   t.toBlob(b=>{
     const a=document.createElement('a');
     a.href=URL.createObjectURL(b);
-    a.download='puffs-'+seed.toString(16)+'.png';
+    a.download='eve-'+seed.toString(16)+'.png';
     a.click();
     setTimeout(()=>URL.revokeObjectURL(a.href),8000);
     say('SAVED '+a.download);
@@ -899,7 +899,7 @@ function tickTimers(){
    then queued sentences are merged into longer utterances so the voice keeps one continuous
    intonation instead of restarting on every full stop. */
 const TTS={q:[],cur:null,dog:0,waiters:[],first:true};
-const voicePrefs={name:lsGet('puffs.voice',''),rate:lsGet('puffs.rate',1)};
+const voicePrefs={name:lsGet('eve.voice',''),rate:lsGet('eve.rate',1)};
 let voices=[], rankedVoices=[];
 const NOVELTY=/\b(albert|bad news|bahh|bells|boing|bubbles|cellos|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|fred|junior|ralph|grandma|grandpa|rocko|shelley|eddy|flo|reed|sandy)\b/i;
 function voiceScore(v){
@@ -939,11 +939,11 @@ function cycleVoice(){
   if(!rankedVoices.length) return "This browser doesn't offer other voices.";
   const cur=pickVoice(), top=rankedVoices.slice(0,8);
   const next=top[(top.indexOf(cur)+1)%top.length];
-  voicePrefs.name=next.name; lsSet('puffs.voice',next.name);
+  voicePrefs.name=next.name; lsSet('eve.voice',next.name);
   return "Hi, I'm using "+voiceLabel(next)+' now.';
 }
 function setRate(r){
-  voicePrefs.rate=Math.max(0.8,Math.min(1.35,Math.round(r*100)/100)); lsSet('puffs.rate',voicePrefs.rate);
+  voicePrefs.rate=Math.max(0.8,Math.min(1.35,Math.round(r*100)/100)); lsSet('eve.rate',voicePrefs.rate);
   return voicePrefs.rate>1.02?"Okay, I'll talk a bit faster.":voicePrefs.rate<0.98?"Sure, I'll slow down.":'Back to my normal pace.';
 }
 const SAY_UNITS={km:'kilometers',mi:'miles',kg:'kilograms',lb:'pounds',lbs:'pounds',mph:'miles per hour',kph:'kilometers per hour',ft:'feet',cm:'centimeters',mm:'millimeters',ml:'milliliters',oz:'ounces',hz:'hertz',khz:'kilohertz',ms:'milliseconds',mb:'megabytes',gb:'gigabytes'};
@@ -1020,9 +1020,9 @@ const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 const sayEl=$('say'), askInput=$('ask'), stateEl=$('state');
 let assistantOn=false, sr=null, listening=false, srErrs=0, askTextMode=false, assistantMic=false;
 let turnId=0, turnBusy=false, lastReply='', lastCmd=null, listenTimer=0;
-const mem=lsGet('puffs.mem',{name:'',facts:[]});
+const mem=lsGet('eve.mem',{name:'',facts:[]});
 if(!Array.isArray(mem.facts)) mem.facts=[];
-const saveMem=()=>lsSet('puffs.mem',mem);
+const saveMem=()=>lsSet('eve.mem',mem);
 
 function setState(s){
   stateEl.dataset.s=s||'';
@@ -1037,7 +1037,7 @@ function renderTalk(rows,hold){
   const kids=[];
   for(const [who,txt] of rows){
     if(!txt) continue;
-    const d=document.createElement('div'); d.className='line '+({you:'u',puffs:'a'}[who]||'n');
+    const d=document.createElement('div'); d.className='line '+({you:'u',eve:'a'}[who]||'n');
     const w=document.createElement('span'); w.className='who'; w.textContent=who==='note'?'':who;
     const t=document.createElement('span'); t.textContent=txt;
     d.append(w,t); kids.push(d);
@@ -1047,11 +1047,11 @@ function renderTalk(rows,hold){
   clearTimeout(renderTalk.t);
   renderTalk.t=setTimeout(()=>{ sayEl.classList.remove('on'); if(!assistantOn&&!askTextMode) stateEl.classList.remove('on'); syncTalk(); },hold||14000);
 }
-function showExchange(u,r){ renderTalk([['you',u],['puffs',r]]); }
+function showExchange(u,r){ renderTalk([['you',u],['eve',r]]); }
 function notify(msg){
   // spoken announcement outside a conversation turn (timers)
   stopListen();
-  renderTalk([['puffs',msg]]);
+  renderTalk([['eve',msg]]);
   ttsSay(msg);
   ttsIdle().then(scheduleListen);
 }
@@ -1062,7 +1062,7 @@ function openAsk(prefill){
   closeMenu();
   askInput.style.display='block';
   askInput.value=prefill||'';
-  askInput.placeholder=AI.key?'ask puffs anything…':'ask puffs…   /key sk-ant-… connects Claude';
+  askInput.placeholder=AI.key?'ask eve anything…':'ask eve…   /key sk-ant-… connects Claude';
   askInput.focus();
   setState('typing');
   if(!prefill) renderTalk([['note','enter to send · esc to close']],6000);
@@ -1151,8 +1151,8 @@ function toggleAssistant(){
   const wasMic=source==='mic';
   (async()=>{
     if(!wasMic) assistantMic=await toMic();
-    if(!lsGet('puffs.greeted',false)){
-      lsSet('puffs.greeted',true);
+    if(!lsGet('eve.greeted',false)){
+      lsSet('eve.greeted',true);
       ask('hello');
     }else startListen();
   })();
@@ -1191,9 +1191,9 @@ function slash(q){
   const arg=rest.join(' ').trim();
   let msg;
   if(cmd==='key'){
-    if(!arg||arg==='off'){ AI.key=''; AI.client=null; AI.history=[]; lsSet('puffs.key',null); msg='Claude disconnected. Back to the offline brain.'; }
+    if(!arg||arg==='off'){ AI.key=''; AI.client=null; AI.history=[]; lsSet('eve.key',null); msg='Claude disconnected. Back to the offline brain.'; }
     else if(!/^sk-ant-/.test(arg)){ msg="That doesn't look like an Anthropic API key. It should start with s k dash ant."; }
-    else{ AI.key=arg; AI.client=null; AI.history=[]; lsSet('puffs.key',arg); msg='Claude connected. Ask me anything.'; loadSDK().catch(()=>{}); }
+    else{ AI.key=arg; AI.client=null; AI.history=[]; lsSet('eve.key',arg); msg='Claude connected. Ask me anything.'; loadSDK().catch(()=>{}); }
     showExchange('/key '+(arg&&arg!=='off'?'••••••••':arg),msg);
   }else if(cmd==='voice'){
     if(arg==='list'){
@@ -1201,7 +1201,7 @@ function slash(q){
       msg='Voices: '+rankedVoices.slice(0,8).map(voiceLabel).join(', ')+'.';
     }else if(arg){
       const v=rankedVoices.find(x=>voiceLabel(x).toLowerCase().includes(arg.toLowerCase())||x.name.toLowerCase().includes(arg.toLowerCase()));
-      if(v){ voicePrefs.name=v.name; lsSet('puffs.voice',v.name); msg="Hi, I'm "+voiceLabel(v)+'.'; }
+      if(v){ voicePrefs.name=v.name; lsSet('eve.voice',v.name); msg="Hi, I'm "+voiceLabel(v)+'.'; }
       else msg="I couldn't find a voice called "+arg+'. Try slash voice list.';
     }else msg=cycleVoice();
     showExchange(q,msg);
@@ -1444,9 +1444,9 @@ function brain(raw){
 
   // small talk: handled locally offline, by Claude when connected
   if(/^(hi|hey|hello|yo|hiya|howdy)\b/.test(t)||is(/\bgood (morning|afternoon|evening)\b/))
-    return R(pick('Hello','Hi','Hey there')+(mem.name?', '+mem.name:'')+". I'm Puffs, a spectrogram that loops every five seconds. "+pick('Ask me anything, or say help.','What can I do for you?','Say help if you want ideas.'),'chat');
+    return R(pick('Hello','Hi','Hey there')+(mem.name?', '+mem.name:'')+". I'm Eve, a spectrogram that loops every five seconds. "+pick('Ask me anything, or say help.','What can I do for you?','Say help if you want ideas.'),'chat');
   if(is(/\b(who are you|what are you|your name|are you an ai|are you a bot)\b/))
-    return R("I'm Puffs. Out of the box I'm a small offline rulebook inside a five second loop"+(AI.key?', with Claude for the hard questions.':'.'),'chat');
+    return R("I'm Eve. Out of the box I'm a small offline rulebook inside a five second loop"+(AI.key?', with Claude for the hard questions.':'.'),'chat');
   if(is(/\b(what is this|what am i looking at|describe|explain|how does this work)\b/))
     return R('Sixty four frequency bands drive about nine thousand particles around a black void. A shader draws a hundred and fifty radial streaks, and all of it repeats exactly every five seconds.','chat');
   if(is(/\bhow are you\b/)) return R(pick('Sixty frames a second and feeling round. How about you?',"Pretty good. Looping nicely. You?"),'chat');
@@ -1462,7 +1462,7 @@ function brain(raw){
 }
 
 /* ----- Claude (optional; only used after the user pastes an API key) ----- */
-const AI={key:lsGet('puffs.key',''),model:'claude-opus-5-5',client:null,history:[],pending:null};
+const AI={key:lsGet('eve.key',''),model:'claude-opus-5-5',client:null,history:[],pending:null};
 // interrupting rolls the in-flight turn back synchronously, so the next turn never races its cleanup
 function abortClaude(){
   const p=AI.pending; if(!p) return;
@@ -1475,7 +1475,7 @@ let sdkP=null;
 function loadSDK(){
   return sdkP||(sdkP=import('https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.128.0/+esm').catch(e=>{ sdkP=null; throw e; }));
 }
-const SYSTEM=`You are Puffs, the voice assistant living inside a realtime audio-reactive spectrogram artwork in the user's web browser. The artwork is about nine thousand monochrome particles on 36 rings around a black void, driven by 64 frequency bands from 20 Hz to 16 kHz, and it loops seamlessly every five seconds.
+const SYSTEM=`You are Eve, the voice assistant living inside a realtime audio-reactive spectrogram artwork in the user's web browser. The artwork is about nine thousand monochrome particles on 36 rings around a black void, driven by 64 frequency bands from 20 Hz to 16 kHz, and it loops seamlessly every five seconds.
 
 Everything you write is read aloud by text-to-speech and shown as a caption, so write the way a warm, articulate person actually talks: contractions, natural rhythm, a mix of short and longer sentences, and the answer first. Usually one to three sentences. Don't restate the question, don't open with filler like "Great question", and don't sign off with offers of more help. No markdown, lists, emoji, code, URLs or parenthetical asides unless the user asks; when several items matter, weave them into a sentence. Write numbers, units and symbols the way you'd say them ("about twenty kilometers", "seventy percent"). If the user wants detail, give it, still in speakable paragraphs.
 
@@ -1559,7 +1559,7 @@ async function claudeTurn(id,q){
   const ctrl=new AbortController();
   let shown='', pending='';
   AI.pending={mark,q,ctrl,shown:()=>shown};
-  // people fill a long pause before answering; so does Puffs, once, if the first words are slow
+  // people fill a long pause before answering; so does Eve, once, if the first words are slow
   const hmm=setTimeout(()=>{ if(id===turnId&&!shown&&!speaking) ttsSay(pick('Hmm.','Let me think.','One sec.','Let me see.')); },1500);
   const flush=all=>{
     const m=all?pending:(pending.match(/^[\s\S]*[.!?…]["')\]]*(?=\s)/)||[''])[0];
@@ -1613,7 +1613,7 @@ async function claudeTurn(id,q){
     if(ctrl.signal.aborted||id!==turnId) return true;
     AI.history.length=mark;
     if(e instanceof mod.AuthenticationError||e instanceof mod.PermissionDeniedError){
-      AI.key=''; AI.client=null; lsSet('puffs.key',null); setState('');
+      AI.key=''; AI.client=null; lsSet('eve.key',null); setState('');
       respond(q,'Claude rejected that API key, so I disconnected it. Type slash key and a valid key to try again.');
       return true;
     }
@@ -1634,7 +1634,7 @@ function resize(){
   SC=Math.min(W/720,H/900);
   HS=Math.max(1,Math.min(2,SC));
   FW=Math.min(W,H*0.8); FX=(W-FW)/2;
-  // conversation sits above the PUFFS mark unless the screen is wide enough to sit beside it
+  // conversation sits above the EVE mark unless the screen is wide enough to sit beside it
   const besideMark=W/2-60*HS>584;
   const besideStrip=W-(FX+FW*0.92)>270;
   document.documentElement.style.setProperty('--sys-top',(besideStrip?10:Math.round(H*0.164+20*HS))+'px');

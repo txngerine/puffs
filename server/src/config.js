@@ -16,16 +16,10 @@ export function loadConfig() {
     port: tryInt('PORT', 5050, 1, 65535),
     mongoUri: env.MONGODB_URI || '',
     trustProxy: tryInt('TRUST_PROXY', 0, 0, 10),
-    accessPassword: env.ACCESS_PASSWORD || '',
-    // Claude spend limits, counted as input + cache-write + output tokens per UTC day
-    deviceDailyTokens: tryInt('DEVICE_DAILY_TOKENS', 150000, 1000, 1e9),
-    globalDailyTokens: tryInt('DAILY_TOKEN_BUDGET', 2000000, 1000, 1e10),
-    chatPerMinute: tryInt('CHAT_PER_MINUTE', 12, 1, 1000),
     // open apps and send WhatsApp messages on the Mac running the server (requests from that Mac only)
     localActions: env.LOCAL_ACTIONS ? /^(1|true|yes|on)$/i.test(env.LOCAL_ACTIONS) : !production,
   };
   if (production && !config.mongoUri) errors.push('MONGODB_URI is required when NODE_ENV=production');
-  if (production && config.accessPassword && config.accessPassword.length < 8) errors.push('ACCESS_PASSWORD must be at least 8 characters');
   if (errors.length) throw new Error('Invalid configuration:\n  - ' + errors.join('\n  - '));
   return config;
 }

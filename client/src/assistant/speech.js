@@ -5,7 +5,7 @@ import { store } from '../lib/store.js';
 import { voice } from '../engine/engine.js';
 
 const setAState=s=>store.set({aState:s||''});
-// hooks for barge-in: the assistant listens while Puffs talks
+// hooks for barge-in: the assistant listens while Eve talks
 export const speechEvents={onStart:null,onIdle:null};
 const recent=[];
 export function recentSpeech(ms=20000){
@@ -29,16 +29,16 @@ export function setVoiceByName(name){
    then queued sentences are merged into longer utterances so the voice keeps one continuous
    intonation instead of restarting on every full stop. */
 const TTS={q:[],cur:null,dog:0,waiters:[],first:true};
-const voicePrefs={name:lsGet('puffs.voice',''),rate:lsGet('puffs.rate',1)};
+const voicePrefs={name:lsGet('eve.voice',''),rate:lsGet('eve.rate',1)};
 // voice preferences are stored per device in MongoDB; localStorage is only a fast first-paint cache
 function savePrefs(){
-  lsSet('puffs.voice',voicePrefs.name); lsSet('puffs.rate',voicePrefs.rate);
+  lsSet('eve.voice',voicePrefs.name); lsSet('eve.rate',voicePrefs.rate);
   api('/settings',{method:'PUT',body:{voice:voicePrefs.name,rate:voicePrefs.rate}}).catch(()=>{});
 }
 export function applySettings(s){
   if(typeof s?.voice==='string') voicePrefs.name=s.voice;
   if(typeof s?.rate==='number') voicePrefs.rate=s.rate;
-  lsSet('puffs.voice',voicePrefs.name); lsSet('puffs.rate',voicePrefs.rate);
+  lsSet('eve.voice',voicePrefs.name); lsSet('eve.rate',voicePrefs.rate);
 }
 export const getVoicePrefs=()=>({...voicePrefs});
 let voices=[], rankedVoices=[];

@@ -2,7 +2,7 @@
 // behind the same routes and shapes as the Express API (server/src/routes/data.js).
 import { lsGet, lsSet } from '../lib/storage.js';
 
-const KEY = { memory: 'puffs.local.memory', settings: 'puffs.local.settings', saved: 'puffs.local.compositions' };
+const KEY = { memory: 'eve.local.memory', settings: 'eve.local.settings', saved: 'eve.local.compositions' };
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const fail = (status, error, kind) => Object.assign(new Error(error), { status, kind });
 const emptyMemory = () => ({ name: '', facts: [], contacts: [] });
@@ -49,6 +49,6 @@ export async function localApi(path, { method = 'GET', body } = {}) {
   }
   const del = path.match(/^\/compositions\/([\w-]+)$/);
   if (del && method === 'DELETE') { lsSet(KEY.saved, lsGet(KEY.saved, []).filter((c) => c.id !== del[1])); return null; }
-  // Claude and the Mac's device routes don't exist on the phone
+  // the Mac's device routes don't exist on the phone
   throw fail(503, 'not available in the app', 'off');
 }

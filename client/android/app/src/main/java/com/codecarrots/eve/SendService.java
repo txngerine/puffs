@@ -1,4 +1,4 @@
-package com.codecarrots.puffs;
+package com.codecarrots.eve;
 
 import android.accessibilityservice.AccessibilityService;
 import android.content.Intent;
@@ -11,7 +11,7 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import java.util.List;
 
 /**
- * Taps WhatsApp's send button for a message Puffs just opened, then brings Puffs back.
+ * Taps WhatsApp's send button for a message Eve just opened, then brings Eve back.
  * It acts only while armed: for a few seconds after you confirmed a message, and only in WhatsApp.
  * The user turns it on once in Settings > Accessibility.
  */
@@ -59,7 +59,7 @@ public class SendService extends AccessibilityService {
         if (!send.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return;
         Runnable done = take();
         if (done != null) done.run();
-        // back to Puffs once WhatsApp has the message
+        // back to Eve once WhatsApp has the message
         new Handler(Looper.getMainLooper()).postDelayed(() -> startActivity(
             new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)), 900);
     }

@@ -2,12 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { engineMock, state } from './engine.mock.js';
 
 vi.mock('../src/engine/engine.js', () => engineMock);
-const { brain, evalArith } = await import('../src/assistant/brain.js');
+const { brain, evalArith, timeGreeting } = await import('../src/assistant/brain.js');
 const { cancelTimers } = await import('../src/assistant/timers.js');
 const { store } = await import('../src/lib/store.js');
 
 const reply = (q, ctx) => brain(q, ctx)?.r;
-beforeEach(() => { cancelTimers(); store.set({ claude: false, memory: { name: '', facts: [] } }); Object.assign(state, { paused: false, boost: 1, recording: false }); });
+beforeEach(() => { cancelTimers(); store.set({ memory: { name: '', facts: [] } }); Object.assign(state, { paused: false, boost: 1, recording: false }); });
 
 describe('maths and conversions', () => {
   it.each([
@@ -40,9 +40,9 @@ describe('timers', () => {
   it('asks for a duration when missing', () => expect(reply('set a timer')).toMatch(/how long/i));
 });
 
-describe('routing: local commands vs Claude', () => {
+describe('routing: what Eve handles', () => {
   it.each(['what is the world record for the mile', 'help me write a poem', 'can you play a game', 'what is the capital of France'])(
-    '%s goes to Claude', (q) => expect(brain(q)).toBeNull());
+    '%s is not handled, so Eve gives a polite fallback', (q) => expect(brain(q)).toBeNull());
   it('handles visual commands locally', () => {
     expect(brain('pause').kind).toBe('cmd');
     expect(state.paused).toBe(true);
@@ -53,16 +53,24 @@ describe('routing: local commands vs Claude', () => {
     reply('set seed to 42');
     expect(engineMock.setSeed).toHaveBeenCalledWith(42);
   });
-  it('marks small talk as chat so Claude can take it when available', () => {
-    expect(brain('hello').kind).toBe('chat');
-    expect(brain('tell me a joke').kind).toBe('chat');
+  it('answers small talk itself', () => {
+    expect(reply('tell me a joke')).toBeTruthy();
+    expect(reply('how are you')).toMatch(/help|you/);
   });
-  it('explains where Claude is configured', () => expect(reply('connect claude')).toMatch(/ANTHROPIC_API_KEY/));
+  it('greets by time of day, like a virtual assistant', () => {
+    const at = (h) => new Date(2026, 0, 1, h);
+    expect([6, 13, 19, 23].map((h) => timeGreeting(at(h)))).toEqual(['Good morning', 'Good afternoon', 'Good evening', 'Hello']);
+    expect(reply('hello')).toMatch(/^(Good (morning|afternoon|evening)|Hello)\. I'm Eve, your virtual assistant\. How can I help\?$/);
+    store.set({ memory: { name: 'Sam', facts: [] } });
+    expect(reply('hey')).toMatch(/, Sam\. How can I help\?$/);
+    expect(reply('good night')).toMatch(/^Good night, Sam\. Sleep well\./);
+    expect(reply('who are you')).toMatch(/^I'm Eve, your virtual assistant\./);
+  });
 });
 
 describe('memory and compositions go through the assistant context', () => {
   it('passes name, facts and saves to ctx', () => {
-    const ctx = { setMemory: vi.fn(), saveComposition: vi.fn(), resetConversation: vi.fn(), setBargeIn: vi.fn() };
+    const ctx = { setMemory: vi.fn(), saveComposition: vi.fn(), setBargeIn: vi.fn() };
     expect(reply('my name is robin', ctx)).toBe('Nice to meet you, Robin.');
     expect(ctx.setMemory).toHaveBeenCalledWith({ name: 'Robin' });
     reply('remember that I like jazz', ctx);
@@ -71,12 +79,30 @@ describe('memory and compositions go through the assistant context', () => {
     expect(ctx.saveComposition).toHaveBeenCalledWith('dawn');
     reply('forget everything', ctx);
     expect(ctx.setMemory).toHaveBeenLastCalledWith(null);
-    expect(ctx.resetConversation).toHaveBeenCalled();
     reply('turn off interruptions', ctx);
     expect(ctx.setBargeIn).toHaveBeenCalledWith(false);
   });
   it('reads memory from the store', () => {
     store.set({ memory: { name: 'Sam', facts: [] } });
     expect(reply("what's my name")).toBe('You are Sam.');
+  });
+});
+
+describe('wake word', () => {
+  it('turns the wake word on and off by voice', () => {
+    const ctx = { setWake: vi.fn(() => true) };
+    expect(reply('turn on the wake word', ctx)).toMatch(/hey Eve/);
+    expect(ctx.setWake).toHaveBeenLastCalledWith(true);
+    expect(reply('always listen', ctx)).toMatch(/listen all the time/);
+    expect(ctx.setWake).toHaveBeenLastCalledWith(false);
+  });
+  it('says so when the device has no wake word', () => {
+    expect(reply('turn on wake word', { setWake: () => false })).toMatch(/can't listen for a wake word/);
+  });
+  it('goes back to sleep instead of turning off', () => {
+    const ctx = { wake: true, assistantOn: true, doze: vi.fn(), toggleAssistant: vi.fn() };
+    for (const q of ['goodbye', "that's all thanks", 'go to sleep']) brain(q, ctx).after();
+    expect(ctx.doze).toHaveBeenCalledTimes(3);
+    expect(ctx.toggleAssistant).not.toHaveBeenCalled();
   });
 });

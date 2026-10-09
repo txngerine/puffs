@@ -1,4 +1,4 @@
-// Offline brain: fast, local intent rules. Anything it doesn't match goes to Claude on the server.
+// Eve's brain: fast, local intent rules that run entirely in the browser. No AI service is involved.
 import { setPaused, setSeed, reseed, setBoost, hex, num, pick, getState, toMic, audioOff, startCapture, recording, cancelCapture, snapshot, openFilePicker } from '../engine/engine.js';
 import { addTimer, cancelTimers, timerStatus } from './timers.js';
 import { ttsCancel, setRate, cycleVoice, voiceLabel, pickVoice, getVoicePrefs } from './speech.js';
@@ -127,16 +127,21 @@ export function parseDuration(t){
   return hit?s:0;
 }
 const JOKES=[
-  'Why did the phase oscillator cross the road? To reach the other zero crossing.',
-  "I told a joke about the Nyquist frequency. Half of it didn't come through.",
+  "Why don't scientists trust atoms? Because they make up everything.",
+  "I told my computer I needed a break. It said, no problem, I'll go to sleep.",
+  "Why did the scarecrow win an award? He was outstanding in his field.",
+  "I asked my calendar for a joke. It said, sorry, I'm fully booked.",
   'A sine wave walks into a bar. The bartender says, why the long period?',
-  "My loop is only five seconds long, so I never get to the punchline. Wait, there it is.",
 ];
 let jokeIx=0;
-// ctx: { lastReply, assistantOn, toggleAssistant, setMemory, saveComposition, openHelp, resetConversation }
-export function helpText(claude){
-  return 'I can control the visual: pause, play, record, screenshot, reseed, louder, quieter, microphone, or load a file. I can save compositions, open apps, send WhatsApp messages, and I also do timers, maths, unit conversions, the time here or anywhere, coin flips, dice, and I remember things you tell me.'
-    +(claude?' Ask it however you like, and anything else goes to Claude.':' With Claude set up on the server, I can understand any phrasing and answer open questions too.');
+// "Good morning" before noon, "Good afternoon" until five, "Good evening" until ten, then a plain hello
+export function timeGreeting(now=new Date()){
+  const h=now.getHours();
+  return h>=5&&h<12?'Good morning':h>=12&&h<17?'Good afternoon':h>=17&&h<22?'Good evening':pick('Hello','Hi there');
+}
+// ctx: { lastReply, assistantOn, toggleAssistant, setMemory, saveComposition, openHelp }
+export function helpText(){
+  return 'I can set timers, do maths and unit conversions, tell you the time and date, flip a coin or roll dice, remember things you tell me, open apps and send WhatsApp messages. I can also control the visual: pause, play, record, screenshot, reseed, louder, quieter, microphone, or load a file.';
 }
 
 // Answers a follow-up offline (e.g. "five minutes" after "For how long?", or "yes" after "Send it?").
@@ -153,7 +158,7 @@ export function resolvePending(pending,raw,ctx={}){
 
 export function brain(raw,ctx={}){
   const {seed,source,particles,ringCount}=getState();
-  const mem=store.get().memory, claude=store.get().claude;
+  const mem=store.get().memory;
   const t=normalize(raw);
   const is=re=>re.test(t);
   const now=new Date();
@@ -161,8 +166,6 @@ export function brain(raw,ctx={}){
 
   if(!t) return null;
   if(is(/\b(stop talking|be quiet|shut up|silence|hush|never ?mind|cancel that)\b/)){ ttsCancel(); return R(null); }
-  if(is(/\b(connect|use|enable|add|disconnect|disable) (claude|the ai|ai)\b|\bapi key\b/))
-    return R(claude?'Claude is already connected through the server.':"Claude runs on the server. Put an Anthropic API key in server dot env as ANTHROPIC_API_KEY and restart it.");
 
   // messages and apps on this computer (before timers and memory: the message text can be anything)
   if(isAutoSendRequest(raw)) return R(undefined,'cmd',{task:enableAutoSend});
@@ -228,7 +231,7 @@ export function brain(raw,ctx={}){
     if(!mem.facts.length&&!mem.name) return R("Nothing yet. Say remember that, and then whatever you like.");
     return R((mem.name?'Your name is '+mem.name+'. ':'')+(mem.facts.length?'You told me: '+mem.facts.slice(-5).join('; ')+'.':''));
   }
-  if(is(/\bforget (everything|all|it all|about me)\b/)){ ctx.setMemory?.(null); ctx.resetConversation?.(); return R('Done. My memory is empty.'); }
+  if(is(/\bforget (everything|all|it all|about me)\b/)){ ctx.setMemory?.(null); return R('Done. My memory is empty.'); }
 
   if(/^(say that again|repeat( that)?|what did you say|come again|pardon)\b/.test(t))
     return R(ctx.lastReply||"I haven't said anything yet.");
@@ -242,6 +245,15 @@ export function brain(raw,ctx={}){
 
   if(is(/\b(turn off|disable|stop|no more) (the )?(interruptions|interrupting|barge in)\b|\bdont listen while (you )?talk/)){ ctx.setBargeIn?.(false); return R("Okay. I won't listen while I'm talking. Press escape to cut me off."); }
   if(is(/\b(turn on|enable|allow) (the )?(interruptions|interrupting|barge in)\b|\blet me interrupt\b/)){ ctx.setBargeIn?.(true); return R('Sure. Talk over me any time, or just say stop.'); }
+
+  // wake word
+  if(is(/\b(turn on|enable|use|start) (the )?(wake word|hey eve)\b|\bwait for (me to say )?hey eve\b|\b(only )?listen (for|when i say) hey eve\b/)){
+    if(ctx.setWake?.(true)===false) return R("This device can't listen for a wake word. Keep using the talk button.");
+    return R("Okay. I'll wait quietly until you say hey Eve.");
+  }
+  if(is(/\b(turn off|disable|stop|no more) (the )?(wake word|hey eve)\b|\balways listen\b|\blisten all the time\b/)){ ctx.setWake?.(false); return R("Okay. While I'm on, I'll listen all the time. Press V to turn me off."); }
+  if(ctx.wake&&is(/^(go to sleep|sleep|stop listening|never ?mind|thats all|nothing)( thanks| thank you)?( eve)?$/))
+    return R('Okay.','cmd',{after:()=>ctx.doze?.()});
 
   // the visual
   if(is(/\b(load|open|choose|play|pick|use) (a |an |some |my )?(audio )?(file|song|track|music)\b/)) return R(openFilePicker());
@@ -277,25 +289,30 @@ export function brain(raw,ctx={}){
   const app=parseOpenApp(raw);
   if(app) return R(undefined,'cmd',{task:()=>openApp(app)});
   if(/^(help|commands|options)( me)?( please)?$/.test(t)||is(/\bwhat (can|do) you do\b/))
-    return R(helpText(claude));
+    return R(helpText());
   if(/^(bye|goodbye|good night|see you|later|thats all)\b/.test(t))
-    return R('Looping. Press V when you want me back.','cmd',{after:()=>{ if(ctx.assistantOn) ctx.toggleAssistant?.(); }});
+  {
+    const bye=/^good night\b/.test(t)?'Good night'+(mem.name?', '+mem.name:'')+'. Sleep well.':pick('Goodbye.','Talk to you later.','See you soon.');
+    return ctx.wake?R(bye+' Say hey Eve when you need me.','cmd',{after:()=>ctx.doze?.()})
+      :R(bye+' Press V when you need me.','cmd',{after:()=>{ if(ctx.assistantOn) ctx.toggleAssistant?.(); }});
+  }
 
-  // small talk: handled locally offline, by Claude when connected
-  if(/^(hi|hey|hello|yo|hiya|howdy)\b/.test(t)||is(/\bgood (morning|afternoon|evening)\b/))
-    return R(pick('Hello','Hi','Hey there')+(mem.name?', '+mem.name:'')+". I'm Puffs, a spectrogram that loops every five seconds. "+pick('Ask me anything, or say help.','What can I do for you?','Say help if you want ideas.'),'chat');
+  // small talk
+  if(/^(hi|hey|hello|yo|hiya|howdy|greetings)\b/.test(t)||is(/\bgood (morning|afternoon|evening|day)\b/))
+    return R(timeGreeting(now)+(mem.name?', '+mem.name+'. ':". I'm Eve, your virtual assistant. ")+pick('How can I help?','What can I do for you?','How can I help you today?'),'chat');
   if(is(/\b(who are you|what are you|your name|are you an ai|are you a bot)\b/))
-    return R("I'm Puffs. Out of the box I'm a small offline rulebook inside a five second loop"+(claude?', with Claude for the hard questions.':'.'),'chat');
+    return R("I'm Eve, your virtual assistant. I can set timers, do quick maths, tell you the time, remember things, open apps and send WhatsApp messages. Say help to hear more.",'chat');
   if(is(/\b(what is this|what am i looking at|describe|explain|how does this work)\b/))
-    return R('Sixty four frequency bands drive about nine thousand particles around a black void. A shader draws a hundred and fifty radial streaks, and all of it repeats exactly every five seconds.','chat');
-  if(is(/\bhow are you\b/)) return R(pick('Sixty frames a second and feeling round. How about you?',"Pretty good. Looping nicely. You?"),'chat');
+    return R("I'm Eve, a voice assistant. Behind me, sixty four frequency bands drive about nine thousand particles that react to sound and loop every five seconds. Talk to me, or say help to see what I can do.",'chat');
+  if(is(/\bhow are you\b|\bhows it going\b|\bhow are things\b/)) return R(pick("I'm doing well, thanks for asking. How can I help?","I'm great, thank you. How about you?","All good here. What can I do for you?"),'chat');
+  if(is(/^(im|i am) (good|fine|great|ok|okay|well|doing well)\b/)) return R(pick('Glad to hear it. What can I do for you?','Good to hear. How can I help?'),'chat');
   if(is(/\b(joke|make me laugh|something funny)\b/)) return R(JOKES[jokeIx++%JOKES.length],'chat');
   if(is(/\b(weather|temperature outside|how hot|how cold|forecast|news)\b/))
-    return R("I can't see outside. I only know twenty hertz to sixteen kilohertz.",'chat');
+    return R("Sorry, I can't check live information like the weather or news. I'm not connected to the internet.",'chat');
   if(is(/\b(how long is the loop|five second|the loop)\b/))
     return R('Exactly five seconds. Say record and I will hand you the whole loop as a video.','chat');
   if(is(/\b(thank|thanks|cheers)\b/)) return R(pick('Anytime.',"You're welcome.",'Happy to help.','Of course.'),'chat');
-  if(is(/\bsing\b/)) return R('La la la. Twenty hertz to sixteen kilohertz.','chat');
-  if(is(/\bare you (real|alive)\b/)) return R('Alive enough to keep the same five seconds forever.','chat');
+  if(is(/\bsing\b/)) return R("I'm better at helping than singing, but here goes. La la la.",'chat');
+  if(is(/\bare you (real|alive|human)\b/)) return R("I'm a virtual assistant, so not quite. But I'm here whenever you need me.",'chat');
   return null;
 }

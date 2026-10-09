@@ -17,4 +17,4 @@ createRoot(document.getElementById('root')).render(
 );
 
 // ?debug=1 exposes internals for manual testing in the console
-if (new URLSearchParams(location.search).has('debug')) window.__puffs = { engine, brain, assistant, speech, timers, store };
+if (new URLSearchParams(location.search).has('debug')) window.__eve = { engine, brain, assistant, speech, timers, store };

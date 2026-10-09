@@ -15,14 +15,14 @@ export async function connectDb(uri) {
     } catch {
       throw new Error('MONGODB_URI is not set and mongodb-memory-server is not installed. Set MONGODB_URI in server/.env.');
     }
-    if (process.env.PUFFS_EPHEMERAL_DB === '1') {
+    if (process.env.EVE_EPHEMERAL_DB === '1') {
       embedded = await MongoMemoryServer.create(); // tests: throwaway database
     } else {
       const dbPath = fileURLToPath(new URL('../.data/db', import.meta.url));
       mkdirSync(dbPath, { recursive: true });
       embedded = await MongoMemoryServer.create({ instance: { dbPath, storageEngine: 'wiredTiger' } });
     }
-    uri = embedded.getUri('puffs');
+    uri = embedded.getUri('eve');
     mode = 'embedded';
   }
   await mongoose.connect(uri);

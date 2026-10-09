@@ -1,22 +1,22 @@
-// Assistant orchestration: listening, turn-taking, local brain vs. Claude (via the Express API), memory sync.
-import { ensureCtx, toMic, releaseMic, getState, setPaused, setSeed, reseed, setBoost, snapshot, startCapture, audioOff, recording, hex } from '../engine/engine.js';
+// Assistant orchestration: listening, turn-taking, the local brain, and memory sync with the Express API.
+import { ensureCtx, toMic, releaseMic, getState, hex } from '../engine/engine.js';
 import { brain, resolvePending } from './brain.js';
-import { runIntent } from './intents.js';
-import { addTimer, cancelTimers, timerStatus, setTimerHandler } from './timers.js';
+import { setTimerHandler } from './timers.js';
 import { ttsSay, ttsCancel, ttsIdle, isSpeaking, cycleVoice, setVoiceByName, getRankedVoices, voiceLabel, applySettings, speechEvents, recentSpeech } from './speech.js';
 import { isEcho, isStop, isTalkingOver } from './bargein.js';
+import { parseWake } from './wake.js';
 import { store, toast } from '../lib/store.js';
-import { api, stream } from '../lib/api.js';
+import { api } from '../lib/api.js';
 import { lsGet, lsSet } from '../lib/storage.js';
 import { isNative } from '../native/native.js';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let sr = null, listening = false, srErrs = 0, assistantMic = false;
-let turnId = 0, turnBusy = false, lastReply = '', listenTimer = 0, talkTimer = 0, chatCtrl = null;
+let turnId = 0, turnBusy = false, lastReply = '', listenTimer = 0, talkTimer = 0;
 
 const st = () => store.get();
 const setAState = (s) => store.set({ aState: s || '' });
-const FALLBACK = "I don't know that one yet. Say help to hear what I can do.";
+const FALLBACK = "Sorry, I can't help with that yet. Say help to hear what I can do.";
 
 /* ----- conversation caption ----- */
 function renderTalk(rows, hold) {
@@ -24,14 +24,14 @@ function renderTalk(rows, hold) {
   clearTimeout(talkTimer);
   talkTimer = setTimeout(() => store.set({ talk: { ...st().talk, visible: false } }), hold || 14000);
 }
-const showExchange = (u, r) => renderTalk([['you', u], ['puffs', r]]);
+const showExchange = (u, r) => renderTalk([['you', u], ['eve', r]]);
 function respond(q, text) { lastReply = text; showExchange(q, text); ttsSay(text); }
 function notify(msg) {
   // spoken announcement outside a conversation turn (timers)
   stopListen();
-  renderTalk([['puffs', msg]]);
+  renderTalk([['eve', msg]]);
   ttsSay(msg);
-  ttsIdle().then(() => scheduleListen());
+  ttsIdle().then(() => listenAfterTurn());
 }
 setTimerHandler(notify);
 
@@ -39,13 +39,13 @@ setTimerHandler(notify);
 export async function loadServerState() {
   try {
     const [health, memory, settings, saved] = await Promise.all([
-      isNative ? { claude: false, locked: false, device: true } : fetch('/api/health').then((r) => r.json()),
+      isNative ? { device: true } : fetch('/api/health').then((r) => r.json()),
       api('/memory'), api('/settings'), api('/compositions'),
     ]);
     applySettings(settings);
-    store.set({ server: 'ok', claude: !!health.claude, locked: !!health.locked, device: !!health.device, memory, saved });
+    store.set({ server: 'ok', device: !!health.device, memory, saved });
   } catch {
-    store.set({ server: 'offline', claude: false });
+    store.set({ server: 'offline' });
     toast('server offline — assistant runs offline only', 5000);
   }
 }
@@ -69,7 +69,6 @@ export async function deleteComposition(id) {
   store.set({ saved: st().saved.filter((c) => c.id !== id) });
   await api('/compositions/' + id, { method: 'DELETE' }).catch(() => toast("couldn't delete on the server"));
 }
-async function resetConversation() { await api('/assistant/reset', { method: 'POST' }).catch(() => {}); }
 
 /* ----- text box ----- */
 export function openAsk(prefill) {
@@ -81,7 +80,7 @@ export function openAsk(prefill) {
 export function closeAsk() {
   store.set({ typing: false });
   setAState('');
-  scheduleListen();
+  listenAfterTurn();
 }
 // esc inside the box: first interrupts an answer, then closes
 export function escapeAsk() {
@@ -111,11 +110,11 @@ function recognizeLocally(rec) {
   if (localLang && 'processLocally' in rec) { rec.processLocally = true; rec.lang = localLang; }
 }
 
-/* ----- barge-in: keep listening while Puffs talks, so you can interrupt by voice ----- */
+/* ----- barge-in: keep listening while Eve talks, so you can interrupt by voice ----- */
 let bargeSr = null, barging = false, bargeTimer = 0, bargeCut = false;
 // Android's recognizer can't listen while the phone speaks, so the app takes turns instead
-let bargeOn = !isNative && lsGet('puffs.barge', true);
-export function setBargeIn(on) { bargeOn = on && !isNative; lsSet('puffs.barge', on); if (!on) stopBarge(); }
+let bargeOn = !isNative && lsGet('eve.barge', true);
+export function setBargeIn(on) { bargeOn = on && !isNative; lsSet('eve.barge', on); if (!on) stopBarge(); }
 export const bargeInEnabled = () => bargeOn;
 
 speechEvents.onStart = () => {
@@ -143,7 +142,7 @@ function startBarge() {
         return;
       }
       if (isTalkingOver(heard, spoken) && !bargeCut) {
-        bargeCut = true; // stop talking as soon as someone talks over Puffs, then wait for the full sentence
+        bargeCut = true; // stop talking as soon as someone talks over Eve, then wait for the full sentence
         ttsCancel();
         renderTalk([['you', heard]]);
       }
@@ -167,6 +166,64 @@ function stopBarge() {
   barging = false;
 }
 
+/* ----- wake word: with it on, Eve dozes until it hears "hey Eve", like Siri or Alexa -----
+   While dozing, recognition still runs but every transcript is dropped unless it starts with the wake
+   word; nothing is shown, answered or sent to the server. After each answer Eve stays awake for a few
+   seconds so follow-ups don't need the wake word. Android's recognizer beeps on every restart, so the
+   app keeps tap-to-talk. */
+const FOLLOW_MS = 8000;
+let wakeOn = !isNative && !!SR && lsGet('eve.wake', false), awakeUntil = 0, dozeTimer = 0;
+store.set({ wake: wakeOn });
+const dozing = () => wakeOn && Date.now() >= awakeUntil;
+const setAsleep = (v) => { if (st().asleep !== v) store.set({ asleep: v }); };
+export const wakeEnabled = () => wakeOn;
+function watchDoze() {
+  clearTimeout(dozeTimer);
+  const left = awakeUntil - Date.now();
+  if (wakeOn && left > 0) { setAsleep(false); dozeTimer = setTimeout(watchDoze, left + 50); return; }
+  setAsleep(wakeOn);
+  if (wakeOn && st().aState === 'listening') setAState('');
+}
+function stayAwake(ms = FOLLOW_MS) { awakeUntil = Date.now() + ms; watchDoze(); }
+export function doze() { awakeUntil = 0; watchDoze(); scheduleListen(); }
+export function setWake(on) {
+  wakeOn = !!on && !isNative && !!SR;
+  lsSet('eve.wake', wakeOn);
+  store.set({ wake: wakeOn });
+  watchDoze();
+  if (wakeOn && !st().assistantOn) toggleAssistant({ asleep: true });
+  return wakeOn;
+}
+// a short rising blip: Eve heard its name and is listening
+let chimeCtx = null;
+function chime() {
+  try {
+    chimeCtx = chimeCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (chimeCtx.state === 'suspended') chimeCtx.resume();
+    const t = chimeCtx.currentTime, o = chimeCtx.createOscillator(), g = chimeCtx.createGain();
+    o.frequency.setValueAtTime(660, t); o.frequency.exponentialRampToValueAtTime(990, t + 0.12);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.18, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+    o.connect(g); g.connect(chimeCtx.destination); o.start(t); o.stop(t + 0.25);
+  } catch { /* no Web Audio: the caption still shows */ }
+}
+// a final transcript from the listener: dozing, only the wake word counts
+function heard(txt) {
+  const w = parseWake(txt);
+  if (dozing() && !w) return false;
+  stopListen();
+  if (w && !w.rest) {
+    chime(); stayAwake();
+    renderTalk([['note', 'listening…']], 4000);
+    scheduleListen(150);
+  } else ask(w ? w.rest : txt);
+  return true;
+}
+// after a turn: keep listening, awake for a follow-up
+function listenAfterTurn(delay) {
+  if (wakeOn) stayAwake();
+  scheduleListen(delay);
+}
+
 /* ----- listening ----- */
 function scheduleListen(delay) {
   clearTimeout(listenTimer);
@@ -186,10 +243,12 @@ function startListen() {
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
-        if (r.isFinal) { srErrs = 0; const txt = r[0].transcript; stopListen(); ask(txt); return; }
+        if (r.isFinal) { srErrs = 0; if (heard(r[0].transcript)) return; continue; }
         interim += r[0].transcript;
       }
-      if (interim) renderTalk([['you', interim]]);
+      if (!interim || dozing()) return; // dozing: nothing is shown
+      if (wakeOn) stayAwake(); // still talking: don't doze off mid-sentence
+      renderTalk([['you', interim]]);
     };
     sr.onerror = (e) => {
       const err = e.error || 'error';
@@ -204,10 +263,11 @@ function startListen() {
     sr.onend = () => {
       listening = false;
       if (st().aState === 'listening') setAState('');
-      if (st().assistantOn && !st().typing && !isSpeaking() && !turnBusy) scheduleListen(500);
+      if (st().assistantOn && !st().typing && !isSpeaking() && !turnBusy) scheduleListen(dozing() ? 100 : 500); // a gap could miss the wake word
     };
   }
-  try { sr.start(); listening = true; setAState('listening'); } catch { /* already running */ }
+  try { sr.start(); listening = true; if (!dozing()) setAState('listening'); } catch { /* already running */ }
+  watchDoze();
 }
 function stopListen() {
   clearTimeout(listenTimer);
@@ -216,16 +276,16 @@ function stopListen() {
 }
 export function interrupt() {
   turnId++; turnBusy = false;
-  if (chatCtrl) { chatCtrl.abort(); chatCtrl = null; } // the server keeps the interrupted exchange
   ttsCancel();
 }
 export function escapeTalk() {
   if (isSpeaking() || turnBusy) { interrupt(); setAState(''); toast('interrupted'); scheduleListen(); }
 }
 
-export function toggleAssistant() {
+export function toggleAssistant({ asleep = false } = {}) {
   if (st().assistantOn) {
-    store.set({ assistantOn: false, typing: false, talk: { ...st().talk, visible: false } });
+    store.set({ assistantOn: false, typing: false, asleep: false, talk: { ...st().talk, visible: false } });
+    clearTimeout(dozeTimer);
     interrupt(); stopListen(); stopBarge();
     setAState('');
     toast('assistant off');
@@ -234,64 +294,42 @@ export function toggleAssistant() {
   }
   store.set({ assistantOn: true });
   ensureCtx();
-  toast(isNative ? 'assistant on — tap talk to stop' : 'assistant on — V to stop, esc to interrupt');
+  // pressing V means "listen now"; starting on page load means "wait for hey Eve"
+  if (wakeOn) { awakeUntil = asleep ? 0 : Date.now() + FOLLOW_MS; watchDoze(); }
+  toast(isNative ? 'assistant on — tap talk to stop'
+    : wakeOn ? 'listening for “hey eve” — V to stop, W for always listening' : 'assistant on — V to stop, esc to interrupt');
   setAState('');
   const wasMic = getState().source === 'mic';
   (async () => {
-    // in the app the recognizer needs the microphone to itself; the rings follow Puffs' voice instead
+    // in the app the recognizer needs the microphone to itself; the rings follow Eve's voice instead
     if (!wasMic && !isNative) assistantMic = await toMic();
     await prepareLocalSpeech();
     if (localLang && sr) recognizeLocally(sr);
-    if (!lsGet('puffs.greeted', false)) { lsSet('puffs.greeted', true); ask('hello'); }
+    if (!lsGet('eve.greeted', false) && !asleep) { lsSet('eve.greeted', true); ask('hello'); }
     else startListen();
   })();
 }
 
 /* ----- a turn ----- */
 const brainCtx = () => ({
-  lastReply, assistantOn: st().assistantOn, toggleAssistant, setMemory, saveComposition, resetConversation, setBargeIn,
+  lastReply, assistantOn: st().assistantOn, toggleAssistant, setMemory, saveComposition, setBargeIn,
+  wake: wakeOn, setWake, doze,
   openHelp: () => store.set({ helpOpen: true, menuOpen: false }),
 });
 
-/* ----- conversation state for understanding: recent turns and an open follow-up question ----- */
-let recent = [];      // last few { user, assistant } exchanges, so "again" or "cancel that" make sense
-let pending = null;   // { intent, question, label, prep, at } after Puffs asked something like "For how long?"
+/* ----- an open follow-up question, like "For how long?" ----- */
+let pending = null;   // { intent, question, label, prep, at }
 const PENDING_MS = 60_000;
-function noteTurn(user, assistant, { toServer = true } = {}) {
-  if (!assistant) return;
-  recent = [...recent, { user, assistant }].slice(-3);
-  if (toServer && st().claude) api('/assistant/append', { method: 'POST', body: { user, assistant } }).catch(() => {});
-}
-
-// Small model: utterance -> { intent, slots, follow_up }. Null when unavailable; the chat model is the fallback.
-async function understandRemote(id, q, pend) {
-  const ctrl = new AbortController(); chatCtrl = ctrl;
-  const timer = setTimeout(() => ctrl.abort(), 8000);
-  try {
-    return await api('/assistant/understand', {
-      method: 'POST', signal: ctrl.signal,
-      body: {
-        text: q, recent,
-        pending: pend ? { intent: pend.intent, question: pend.question } : null,
-        context: { time: new Date().toLocaleString(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone },
-      },
-    });
-  } catch { return null; } finally {
-    clearTimeout(timer);
-    if (chatCtrl === ctrl) chatCtrl = null;
-  }
-}
 
 /* A turn, Siri-style:
-   1. an open follow-up ("For how long?") is answered offline when possible
-   2. instant local rules handle clear commands
-   3. the small model works out what any other phrasing means, and the command runs locally
-   4. only real questions and conversation go to the chat model */
+   1. an open follow-up ("For how long?") is answered with what was already asked
+   2. otherwise the local rules handle the request; anything they don't cover gets a polite fallback */
 export async function ask(raw) {
   const q = (raw || '').trim();
   if (!q) return;
   interrupt();
   stopListen();
+  if (wakeOn) stayAwake(); // listenAfterTurn extends this once the answer is spoken
   const id = turnId;
   if (q[0] === '/') { slash(q); return; }
   turnBusy = true; setAState('thinking');
@@ -299,64 +337,21 @@ export async function ask(raw) {
   const ctx = brainCtx();
   const pend = pending && Date.now() - pending.at < PENDING_MS ? pending : null;
   pending = null;
-  let after = null;
 
-  const claude = st().claude;
-  const offline = pend && resolvePending(pend, q, ctx);
-  // with Claude, an unresolved follow-up goes to the language model, which sees the open question
-  let local = offline || (pend && claude ? null : brain(q, ctx));
+  let local = (pend && resolvePending(pend, q, ctx)) || brain(q, ctx);
   if (local?.task) {
     // device actions and lookups: a contact search or opening an app takes a moment
-    local = { kind: 'cmd', ...(await local.task()) };
+    local = await local.task();
     if (id !== turnId) return;
   }
-  if (offline) local.kind = 'cmd';
-  if (local && local.r === null) {
-    turnBusy = false; setAState(''); scheduleListen(); return;
-  } else if (local && (local.kind === 'cmd' || !claude)) {
-    respond(q, local.r); noteTurn(q, local.r);
-    if (local.pending) pending = { ...local.pending, at: Date.now() };
-    after = local.after;
-  } else if (claude) {
-    const frame = await understandRemote(id, q, pend);
-    if (id !== turnId) return;
-    let handled = false;
-    if (frame && frame.intent !== 'question' && frame.intent !== 'chat') {
-      // a follow-up answer keeps what was already known (e.g. the timer's label)
-      if (pend && frame.intent === pend.intent && !frame.slots.label && pend.label) frame.slots.label = pend.label;
-      let out = runIntent(frame, ctx);
-      if (out.task) {
-        const res = await out.task();
-        if (id !== turnId) return;
-        out = res.pending ? { followUp: res.r, pendingState: res.pending } : { reply: res.r };
-      }
-      if (out.pendingState) {
-        pending = { ...out.pendingState, at: Date.now() };
-        respond(q, out.followUp); noteTurn(q, out.followUp, { toServer: false });
-        handled = true;
-      } else if (out.followUp) {
-        pending = { intent: frame.intent, question: out.followUp, label: frame.slots.label || '', prep: 'for', at: Date.now() };
-        respond(q, out.followUp); noteTurn(q, out.followUp, { toServer: false });
-        handled = true;
-      } else if (!out.delegate) {
-        if (out.reply === null) { turnBusy = false; setAState(''); scheduleListen(); return; }
-        respond(q, out.reply); noteTurn(q, out.reply);
-        after = out.after;
-        handled = true;
-      }
-    }
-    if (!handled) {
-      const ok = await claudeTurn(id, q);
-      if (!ok && id === turnId) respond(q, local ? local.r : FALLBACK);
-      if (id === turnId) noteTurn(q, lastReply, { toServer: false }); // the server already stored the chat turn
-    }
-  } else respond(q, FALLBACK);
-  if (id !== turnId) return;
+  if (local && local.r === null) { turnBusy = false; setAState(''); listenAfterTurn(); return; }
+  respond(q, local ? local.r : FALLBACK);
+  if (local?.pending) pending = { ...local.pending, at: Date.now() };
   await ttsIdle();
   if (id !== turnId) return;
   turnBusy = false; setAState('');
-  if (after) after();
-  else scheduleListen();
+  if (local?.after) local.after();
+  else listenAfterTurn();
 }
 
 function slash(q) {
@@ -367,101 +362,13 @@ function slash(q) {
     if (arg === 'list') msg = 'Voices: ' + getRankedVoices().slice(0, 8).map(voiceLabel).join(', ') + '.';
     else if (arg) { const v = setVoiceByName(arg); msg = v ? "Hi, I'm " + voiceLabel(v) + '.' : "I couldn't find a voice called " + arg + '. Try slash voice list.'; }
     else msg = cycleVoice();
-  } else if (cmd === 'reset') {
-    resetConversation(); msg = 'Fresh conversation.';
-  } else if (cmd === 'unlock') {
-    unlock(arg); return;
   } else if (cmd === 'save') {
     saveComposition(arg); msg = 'Saved.';
   } else {
-    msg = 'Commands: slash voice, slash voice list, slash save, slash reset, slash unlock.';
+    msg = 'Commands: slash voice, slash voice list, slash save.';
   }
   showExchange(q, msg);
   setAState('');
   lastReply = msg; ttsSay(msg);
-  ttsIdle().then(() => scheduleListen());
-}
-
-// checks the server's access password before keeping it (never shown on screen)
-async function unlock(pw) {
-  const finish = (msg) => { showExchange('/unlock ••••••••', msg); setAState(''); lastReply = msg; ttsSay(msg); ttsIdle().then(() => scheduleListen()); };
-  if (!pw) { lsSet('puffs.access', null); return finish('Password cleared.'); }
-  try {
-    await api('/assistant/unlock', { method: 'POST', headers: { 'x-puffs-access': pw } });
-    lsSet('puffs.access', pw);
-    finish('Unlocked. Claude is available.');
-  } catch (e) {
-    finish(e.status === 401 ? "That password didn't work." : "I couldn't reach the server.");
-  }
-}
-
-/* ----- Claude, streamed from the server ----- */
-function context() {
-  const s = getState();
-  return {
-    time: new Date().toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit' }),
-    seed: s.seed, source: s.source, paused: s.paused, boost: s.boost, recording: recording(),
-    timers: timerStatus() === 'No timers running.' ? '' : timerStatus(),
-  };
-}
-// screen-side effects of Claude's tools; validated on the server first
-function runClientTool(name, i) {
-  switch (name) {
-    case 'control_visual':
-      if (i.action === 'pause') setPaused(true);
-      else if (i.action === 'play') setPaused(false);
-      else if (i.action === 'reseed') reseed();
-      else if (i.action === 'screenshot') snapshot();
-      else if (i.action === 'record') startCapture();
-      break;
-    case 'set_seed': setSeed(i.seed); break;
-    case 'set_boost': setBoost(i.level); break;
-    case 'set_audio_source': if (i.source === 'mic') toMic(); else audioOff(); break;
-    case 'set_timer': addTimer(i.seconds, i.label, 'for'); break;
-    case 'cancel_timers': cancelTimers(); break;
-  }
-}
-const pickOne = (...a) => a[Math.floor(Math.random() * a.length)];
-
-async function claudeTurn(id, q) {
-  const ctrl = new AbortController(); chatCtrl = ctrl;
-  let shown = '', pending = '', outcome = 'ok';
-  const flush = (all) => {
-    const m = all ? pending : (pending.match(/^[\s\S]*[.!?…]["')\]]*(?=\s)/) || [''])[0];
-    if (m.trim()) { ttsSay(m); pending = pending.slice(m.length); }
-  };
-  // people fill a long pause before answering; so does Puffs, once, if the first words are slow
-  const hmm = setTimeout(() => { if (id === turnId && !shown && !isSpeaking()) ttsSay(pickOne('Hmm.', 'Let me think.', 'One sec.', 'Let me see.')); }, 1500);
-  try {
-    await stream('/assistant/chat', { message: q, context: context() }, {
-      signal: ctrl.signal,
-      onEvent(ev, d) {
-        if (id !== turnId) return;
-        if (ev === 'text') { shown += d.t; pending += d.t; showExchange(q, shown); flush(false); }
-        else if (ev === 'action') runClientTool(d.name, d.input || {});
-        else if (ev === 'memory') store.set({ memory: d });
-        else if (ev === 'saved') store.set({ saved: [d, ...st().saved] });
-        else if (ev === 'refusal') outcome = 'refusal';
-        else if (ev === 'error') outcome = d.kind || 'other';
-      },
-    });
-  } catch (e) {
-    if (ctrl.signal.aborted || id !== turnId) return true;
-    if (e.status === 503) store.set({ claude: false });
-    outcome = e.status === 401 ? 'locked' : e.status === 429 ? (e.kind === 'budget' ? 'budget' : 'rate') : 'other';
-  } finally {
-    clearTimeout(hmm);
-    if (chatCtrl === ctrl) chatCtrl = null;
-  }
-  if (id !== turnId) return true;
-  flush(true);
-  if (outcome === 'refusal') { respond(q, "I can't help with that one."); return true; }
-  if (outcome === 'auth') { store.set({ claude: false }); respond(q, "The server's Anthropic key was rejected, so I'm using my offline brain for now."); return true; }
-  if (outcome === 'rate') { respond(q, "You're asking faster than I'm allowed to answer. Give me a few seconds."); return true; }
-  if (outcome === 'budget') { respond(q, "I've used up today's Claude allowance, so I'm on my offline brain until tomorrow."); return true; }
-  if (outcome === 'locked') { respond(q, 'Claude is password protected on this server. Press T and type slash unlock, then the password.'); return true; }
-  if (outcome !== 'ok') { toast('claude unavailable — answered offline', 4000); return false; }
-  lastReply = shown.trim();
-  if (!lastReply) { lastReply = 'Done.'; respond(q, lastReply); }
-  return true;
+  ttsIdle().then(() => listenAfterTurn());
 }

@@ -37,7 +37,7 @@ describe('voice ranking', () => {
 
 describe('barge-in', () => {
   const spoken = 'The capital of France is Paris. It sits on the Seine.';
-  it('ignores Puffs hearing itself', () => {
+  it('ignores Eve hearing itself', () => {
     expect(isEcho('the capital of France is Paris', spoken)).toBe(true);
     expect(isEcho('it sits on the sane', spoken)).toBe(true);
   });
@@ -46,7 +46,7 @@ describe('barge-in', () => {
     expect(isTalkingOver('um', spoken)).toBe(false);
   });
   it('recognizes stop words', () => {
-    for (const s of ['stop', 'wait a second', 'hey puffs, stop', 'never mind', 'okay puffs be quiet']) expect(isStop(s)).toBe(true);
+    for (const s of ['stop', 'wait a second', 'hey eve, stop', 'never mind', 'okay eve be quiet']) expect(isStop(s)).toBe(true);
     expect(isStop('stopwatch please')).toBe(false);
     expect(isStop('what is a stop sign')).toBe(false);
   });

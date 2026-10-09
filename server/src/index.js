@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { connectDb, closeDb } from './db.js';
 import { createApp } from './app.js';
-import { claudeEnabled } from './assistant/claude.js';
 import { log } from './logger.js';
 
 let config;
@@ -26,8 +25,8 @@ try {
 const app = createApp(config, { dbMode: () => dbMode });
 const server = app.listen(config.port, () => {
   const served = existsSync(fileURLToPath(new URL('../../client/dist', import.meta.url)));
-  log.info(`puffs api on http://localhost:${config.port}`, {
-    db: dbMode, claude: claudeEnabled() ? 'on' : 'off', access: config.accessPassword ? 'password' : 'open', app: served,
+  log.info(`eve api on http://localhost:${config.port}`, {
+    db: dbMode, app: served,
   });
 });
 
