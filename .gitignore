@@ -1,0 +1,14 @@
+node_modules/
+client/dist/
+server/.env
+server/.data/
+.DS_Store
+test-results/
+e2e/report/
+client/android/app/build/
+client/android/build/
+client/android/.gradle/
+client/android/local.properties
+client/android/app/src/main/assets/public/
+client/android/capacitor-cordova-android-plugins/
+*.apk

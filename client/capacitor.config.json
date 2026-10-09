@@ -1,0 +1,6 @@
+{
+  "appId": "com.codecarrots.puffs",
+  "appName": "Puffs",
+  "webDir": "dist",
+  "android": { "backgroundColor": "#000000" }
+}

@@ -1,0 +1,1851 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Puffs — Realtime Spectrogram</title>
+<style>
+  :root{--mono:ui-monospace,SFMono-Regular,Menlo,monospace;--dim:#8c8c8c;--faint:#5f5f5f;--panel:rgba(0,0,0,.66);--edge:#353535;--talk-bottom:64px;--sys-top:10px}
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;color:#fff}
+  body{font-family:Arial,Helvetica,sans-serif}
+  #stage{position:fixed;inset:0;background:#000;overflow:hidden}
+  #gl,#c,#h{position:absolute;inset:0;width:100%;height:100%;display:block}
+  #file{display:none}
+  #drop{position:absolute;inset:12px;border:1px dashed #666;display:none;place-items:center;font:11px var(--mono);color:#aaa;letter-spacing:2px;pointer-events:none;z-index:6}
+
+  /* system stack (top right): recording, timers, toasts. DOM, so it never lands in exports */
+  #sys{position:absolute;top:var(--sys-top);right:12px;display:flex;flex-direction:column;align-items:flex-end;gap:4px;pointer-events:none;z-index:3}
+  #timers{display:contents}
+  .pill{font:10px/1 var(--mono);letter-spacing:.5px;text-transform:lowercase;color:#d6d6d6;background:var(--panel);border:1px solid #2a2a2a;padding:6px 9px;white-space:nowrap;max-width:min(72vw,380px);overflow:hidden;text-overflow:ellipsis;animation:pin .25s ease}
+  .pill[hidden]{display:none}
+  .pill.out{opacity:0;transition:opacity .4s ease}
+  .pill.rec::before,.pill.warm::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:7px;vertical-align:1px;background:#ff4d4d;animation:blink .8s steps(2) infinite}
+  .pill.warm::before{background:#9a9a9a}
+  .pill.timer{pointer-events:auto;cursor:pointer;font-variant-numeric:tabular-nums}
+  .pill.timer:hover{border-color:#6a6a6a;color:#fff}
+  .pill.timer:hover::after{content:'  cancel';color:var(--dim)}
+
+  /* conversation stack (bottom left): state, caption, text box in one flow, so they never overlap */
+  #talk{position:absolute;left:12px;bottom:var(--talk-bottom);width:min(560px,calc(100% - 24px));display:flex;flex-direction:column;gap:7px;pointer-events:none;z-index:2;padding:8px 10px;margin:-8px -10px;transition:background .4s ease}
+  /* a soft backdrop whenever the conversation is showing, so it reads as its own layer over the HUD */
+  #talk.on{background:linear-gradient(to right,rgba(0,0,0,.62),rgba(0,0,0,.38) 70%,rgba(0,0,0,0))}
+  #state{display:flex;gap:9px;align-items:center;font:9px/1 var(--mono);letter-spacing:.8px;color:var(--dim);opacity:0;transition:opacity .3s;text-shadow:0 0 6px #000}
+  #state.on{opacity:1}
+  #state:not(.on){display:none}
+  #state .dot{width:6px;height:6px;border-radius:50%;background:#4a4a4a}
+  #state[data-s=listening] .dot{background:#fff;animation:breathe 1.4s ease-in-out infinite}
+  #state[data-s=thinking] .dot{background:#aaa;animation:blink .5s steps(2) infinite}
+  #state[data-s=speaking] .dot{background:#fff}
+  #state .brain{color:var(--faint)}
+  #state .brain::before{content:'· '}
+  #say{max-height:34vh;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:3px;font:11px/1.55 var(--mono);opacity:0;transition:opacity .4s ease;text-shadow:0 0 7px #000,0 0 3px #000,0 0 1px #000}
+  #say.on{opacity:1}
+  #say .line{display:grid;grid-template-columns:6ch 1fr}
+  #say .who{color:var(--faint)}
+  #say .u{color:#a9a9a9} #say .a{color:#fff} #say .n{color:var(--dim)}
+  #ask{display:none;pointer-events:auto;width:100%;max-width:440px;background:rgba(0,0,0,.72);border:1px solid #444;border-radius:0;color:#fff;font:11px var(--mono);letter-spacing:.3px;padding:8px 10px;outline:none}
+  #ask:focus{border-color:#8a8a8a}
+  #ask::placeholder{color:#666}
+
+  /* hint, controls menu */
+  #hint{position:absolute;left:12px;bottom:10px;font:9px/1 var(--mono);letter-spacing:.6px;color:var(--faint);pointer-events:none;transition:color 1.2s ease}
+  #hint.fresh{color:#bdbdbd}
+  #hint kbd{font:inherit;border:1px solid #3a3a3a;padding:1px 4px;margin:0 5px 0 0}
+  #hint span+span{margin-left:12px}
+  .btn{font:10px var(--mono);letter-spacing:.8px;color:#cfcfcf;background:rgba(0,0,0,.7);border:1px solid var(--edge);border-radius:0;padding:0 11px;min-height:34px;min-width:118px;cursor:pointer;text-align:left;display:flex;align-items:center;gap:8px}
+  .btn:hover{border-color:#777;color:#fff}
+  .btn:focus-visible{outline:1px solid #fff;outline-offset:2px}
+  .btn[aria-pressed=true]{border-color:#bdbdbd;color:#fff}
+  .btn[aria-pressed=true]::before{content:'';width:5px;height:5px;border-radius:50%;background:#fff;flex:none}
+  .btn kbd{font:inherit;color:var(--faint);margin-left:auto;padding-left:14px}
+  #menu{position:absolute;right:12px;bottom:8px;min-width:0;opacity:0;pointer-events:none;transition:opacity .3s;z-index:4}
+  #menu.show,#menu[aria-expanded=true]{opacity:1;pointer-events:auto}
+  #bar{position:absolute;right:12px;bottom:48px;display:none;flex-direction:column;gap:4px;z-index:4}
+  #bar.open{display:flex}
+  #bar .grp{display:flex;flex-direction:column;gap:4px}
+  #bar .grp+.grp{margin-top:8px}
+  @media (pointer:coarse){ #menu{opacity:1;pointer-events:auto} #hint{display:none} .btn kbd{display:none} .btn{min-height:40px} }
+
+  /* help panel */
+  #help{position:absolute;inset:0;display:none;place-items:center;padding:16px;background:rgba(0,0,0,.55);z-index:5}
+  #help.open{display:grid}
+  #help .card{width:min(540px,100%);max-height:100%;overflow:auto;background:rgba(5,5,5,.95);border:1px solid #333;padding:18px 20px 20px;font:11px/1.6 var(--mono);color:#bdbdbd}
+  #help .head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  #help h2{margin:0;font:900 20px/1 Arial,Helvetica,sans-serif;color:#eee;transform:skewX(4deg)}
+  #help .head .btn{min-width:0}
+  #help p{margin:6px 0 0}
+  #help h3{margin:16px 0 6px;font:9px var(--mono);letter-spacing:1.4px;text-transform:uppercase;color:var(--faint);font-weight:normal}
+  #help dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;margin:0}
+  #help dd{margin:0}
+  #help kbd{font:inherit;color:#eee;border:1px solid #3a3a3a;padding:0 5px}
+  #help .btn kbd{border:0;padding:0 0 0 14px;color:var(--faint)}
+  #help q{color:#eee}
+  #help code{color:#eee}
+  #help .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  #help .row .btn{min-width:0}
+
+  @keyframes pin{from{opacity:0;transform:translateY(-3px)}}
+  @keyframes blink{50%{opacity:.2}}
+  @keyframes breathe{50%{opacity:.3;transform:scale(.7)}}
+  @media (prefers-reduced-motion:reduce){ *{animation:none!important;transition:none!important} }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="gl"></canvas>
+  <canvas id="c"></canvas>
+  <canvas id="h"></canvas>
+  <div id="drop">DROP AUDIO FILE</div>
+  <div id="sys" aria-live="polite">
+    <div class="pill" id="recPill" hidden></div>
+    <div id="timers"></div>
+    <div class="pill" id="toast" hidden></div>
+  </div>
+  <div id="talk">
+    <div id="state"><span class="dot"></span><span class="lbl"></span><span class="brain"></span></div>
+    <div id="say" aria-live="polite"></div>
+    <input id="ask" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ask puffs…"/>
+  </div>
+  <div id="hint" class="fresh"><span><kbd>V</kbd>talk</span><span><kbd>?</kbd>controls</span></div>
+  <div id="bar" role="toolbar" aria-label="Controls">
+    <div class="grp">
+      <button class="btn" data-k="v" id="bV" aria-pressed="false">talk<kbd>V</kbd></button>
+      <button class="btn" data-k="t">type<kbd>T</kbd></button>
+    </div>
+    <div class="grp">
+      <button class="btn" data-k="m" id="bM" aria-pressed="false">microphone<kbd>M</kbd></button>
+      <button class="btn" data-k="f">audio file<kbd>F</kbd></button>
+      <button class="btn" data-k=" " id="bA" aria-pressed="false">live audio<kbd>space</kbd></button>
+    </div>
+    <div class="grp">
+      <button class="btn" data-k="l" id="bL">pause<kbd>L</kbd></button>
+      <button class="btn" data-k="r">new seed<kbd>R</kbd></button>
+      <button class="btn" data-k="p">save still<kbd>P</kbd></button>
+      <button class="btn" data-k="g" id="bG">record 5s<kbd>G</kbd></button>
+    </div>
+    <div class="grp">
+      <button class="btn" data-k="?">help<kbd>?</kbd></button>
+    </div>
+  </div>
+  <button id="menu" class="btn" aria-expanded="false" aria-controls="bar">controls</button>
+  <div id="help" role="dialog" aria-modal="true" aria-labelledby="helpT">
+    <div class="card">
+      <div class="head"><h2 id="helpT">PUFFS</h2><button class="btn" id="helpX">close<kbd>esc</kbd></button></div>
+      <p>A realtime spectrogram that loops every five seconds, with a voice assistant built in.</p>
+      <h3>Keys</h3>
+      <dl>
+        <dt><kbd>V</kbd></dt><dd>talk to puffs, hands-free</dd>
+        <dt><kbd>T</kbd></dt><dd>type to puffs instead</dd>
+        <dt><kbd>esc</kbd></dt><dd>interrupt / close</dd>
+        <dt><kbd>M</kbd> <kbd>F</kbd></dt><dd>microphone / audio file (or drop one anywhere)</dd>
+        <dt><kbd>space</kbd></dt><dd>live audio on or off</dd>
+        <dt><kbd>L</kbd> <kbd>R</kbd></dt><dd>pause / new seed</dd>
+        <dt><kbd>P</kbd> <kbd>G</kbd></dt><dd>save a still / record the 5 s loop as video</dd>
+      </dl>
+      <h3>Try saying</h3>
+      <p><q>set a timer for 5 minutes for pasta</q> · <q>15 percent of 80</q> · <q>10 km to miles</q> · <q>make it louder</q> · <q>new seed</q> · <q>record</q> · <q>remember that I like jazz</q> · <q>help</q></p>
+      <h3>Claude</h3>
+      <p id="helpAI"></p>
+      <h3>This composition</h3>
+      <div class="row"><span>seed <code id="helpSeed"></code></span><button class="btn" id="copyLink">copy link</button></div>
+    </div>
+  </div>
+</div>
+<input id="file" type="file" accept="audio/*"/>
+<script>
+const $=id=>document.getElementById(id);
+const TAU=Math.PI*2, LOOP=5, NB=64;
+const qs=new URLSearchParams(location.search);
+
+function parseSeed(v){
+  if(v===null) return 1337;
+  if(v==='random') return (Math.random()*4294967296)>>>0;
+  const n=parseInt(v,10);
+  return isFinite(n)?n>>>0:1337;
+}
+let seed=parseSeed(qs.get('seed'));
+const hex=n=>n.toString(16).padStart(8,'0');
+
+function lsGet(k,d){ try{ const v=localStorage.getItem(k); return v===null?d:JSON.parse(v); }catch(e){ return d; } }
+function lsSet(k,v){ try{ if(v===null) localStorage.removeItem(k); else localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
+
+const glc=$('gl'), cv=$('c'), ctx=cv.getContext('2d'), hv=$('h'), hctx=hv.getContext('2d');
+const hint=$('hint'), dropEl=$('drop'), fileInput=$('file');
+let W=0,H=0,DPR=1,SC=1,HS=1,FX=0,FW=0;
+let elapsed=0, last=performance.now(), tl=0, paused=false, settle=0;
+const motionParam=qs.get('motion');
+const reduced = motionParam==='0' ? true
+  : motionParam==='1' ? false
+  : matchMedia('(prefers-reduced-motion: reduce)').matches;
+const ph=n=>TAU*(tl/LOOP)*n;
+// while paused the scene is not redrawn; invalidate() re-renders a few frames so trails settle
+function invalidate(){ settle=Math.max(settle,30); }
+
+const toastEl=$('toast'); let toastUntil=0;
+function say(m,ms){
+  toastEl.textContent=m;
+  toastEl.hidden=false;
+  toastEl.classList.remove('out');
+  toastEl.style.animation='none'; void toastEl.offsetWidth; toastEl.style.animation='';
+  toastUntil=performance.now()+(ms||3200);
+}
+function setHint(){
+  $('helpSeed').textContent='0x'+hex(seed);
+}
+
+/* ===== audio ===== */
+let bands=new Float32Array(NB), energy=0, bass=0, mid=0, treble=0;
+let boost=1, voiceEnv=0, speaking=false;
+function bandAt(x){ let i=(x*(NB-1))|0; if(i<0)i=0; if(i>NB-1)i=NB-1; return bands[i]; }
+
+let actx=null, analyser=null, sink=null, recDest=null, freqData=null, binMap=null;
+let source='synth', prevReal=null, audioEl=null, elNode=null, micStream=null, micNode=null;
+
+function ensureCtx(){
+  if(!actx){
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC){ say('Web Audio unavailable'); return; }
+    actx=new AC();
+    analyser=actx.createAnalyser();
+    // 4096 keeps bins ~11.7 Hz wide at 48 kHz; narrower bands interpolate between bins
+    analyser.fftSize=4096;
+    analyser.smoothingTimeConstant=0.6;
+    sink=actx.createGain(); sink.gain.value=0;
+    analyser.connect(sink); sink.connect(actx.destination);
+    if(actx.createMediaStreamDestination) recDest=actx.createMediaStreamDestination();
+    freqData=new Uint8Array(analyser.frequencyBinCount);
+    buildBins();
+  }
+  if(actx.state==='suspended') actx.resume();
+}
+function buildBins(){
+  const res=(actx.sampleRate/2)/analyser.frequencyBinCount;
+  const maxBin=analyser.frequencyBinCount-1;
+  binMap=[];
+  for(let i=0;i<NB;i++){
+    const f0=20*Math.pow(800,i/NB), f1=20*Math.pow(800,(i+1)/NB), fc=20*Math.pow(800,(i+0.5)/NB);
+    let b0=Math.max(1,Math.round(f0/res)), b1=Math.min(maxBin,Math.round(f1/res));
+    let fcb=fc/res; if(fcb>maxBin-1) fcb=maxBin-1;
+    binMap.push({b0,b1,fc:fcb,wide:b1-b0>=2});
+  }
+}
+function stopMic(){
+  if(micNode){ try{micNode.disconnect();}catch(e){} micNode=null; }
+  if(micStream){ micStream.getTracks().forEach(t=>t.stop()); micStream=null; }
+}
+async function toMic(){
+  ensureCtx(); if(!actx) return false;
+  if(source==='mic'&&micStream) return true;
+  stopMic();
+  if(audioEl) audioEl.pause();
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){ say('mic not available'); return false; }
+  say('REQUESTING MIC…',8000);
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+    micStream=s;
+    micNode=actx.createMediaStreamSource(s);
+    micNode.connect(analyser);
+    source='mic'; prevReal='mic';
+    say('MIC ON — live input');
+    return true;
+  }catch(e){
+    if(source==='mic') source=(audioEl&&audioEl.src)?'file':'synth';
+    say('mic unavailable ('+(e.name||'error')+')');
+    return false;
+  }
+}
+function loadFile(file){
+  if(!file) return;
+  ensureCtx(); if(!actx) return;
+  if(!/^audio\//.test(file.type) && !/\.(mp3|wav|ogg|m4a|flac|aac|webm)$/i.test(file.name)){
+    say('not an audio file'); return;
+  }
+  try{
+    if(!audioEl){
+      audioEl=new Audio(); audioEl.loop=true;
+      elNode=actx.createMediaElementSource(audioEl);
+      elNode.connect(analyser); elNode.connect(actx.destination);
+      if(recDest) elNode.connect(recDest);
+    }
+    stopMic();
+    const old=(audioEl.src||'').startsWith('blob:')?audioEl.src:null;
+    audioEl.src=URL.createObjectURL(file);
+    if(old) URL.revokeObjectURL(old);
+    audioEl.play().catch(()=>say('press [Space] to play'));
+    source='file'; prevReal='file';
+    say('PLAYING '+file.name.slice(0,42));
+  }catch(e){ say('could not play that file'); }
+}
+function audioOff(){
+  stopMic(); if(audioEl) audioEl.pause();
+  source='synth'; say('AUDIO OFF — synthetic driver');
+}
+function toggleAudio(){
+  if(source==='synth'){
+    if(prevReal==='mic') toMic();
+    else if(prevReal==='file'&&audioEl){ ensureCtx(); audioEl.play().catch(()=>{}); source='file'; say('file on'); }
+    else say('no source yet — [M] mic or [F] file');
+  }else if(source==='file'&&audioEl&&audioEl.paused){
+    ensureCtx(); audioEl.play().catch(()=>say('playback blocked — press [Space] again'));
+  }else audioOff();
+}
+function readAudio(){
+  if(source!=='synth'&&analyser){
+    analyser.getByteFrequencyData(freqData);
+    for(let i=0;i<NB;i++){
+      const b=binMap[i]; let v;
+      if(b.wide){
+        let s=0; for(let k=b.b0;k<b.b1;k++) s+=freqData[k];
+        v=s/((b.b1-b.b0)*255);
+      }else{
+        const k=Math.floor(b.fc), fr=b.fc-k;
+        v=(freqData[k]*(1-fr)+freqData[k+1]*fr)/255;
+      }
+      v=Math.pow(v,0.7)*1.5; if(v>1)v=1;
+      const t=bands[i];
+      bands[i]=t+(v-t)*(v>t?0.55:0.14);
+    }
+  }else synthBands();
+  if(boost!==1){ for(let i=0;i<NB;i++){ const v=bands[i]*boost; bands[i]=v>1?1:v; } }
+  let e=0,b=0,m=0,tr=0;
+  for(let i=0;i<NB;i++){
+    const v=bands[i]; e+=v;
+    if(i<8)b+=v; else if(i<32)m+=v; else tr+=v;
+  }
+  energy=e/NB; bass=b/8; mid=m/24; treble=tr/32;
+  if(speaking||voiceEnv>0.002) voiceFx();
+}
+function voiceFx(){
+  const v=voiceEnv>1?1:voiceEnv;
+  if(v<=0) return;
+  const t=performance.now()/1000;
+  const f1=9+7*Math.sin(t*4.7)+4*Math.sin(t*2.1);
+  for(let i=0;i<NB;i++){
+    const a=Math.exp(-Math.pow((i-f1)/4.2,2));
+    const b=Math.exp(-Math.pow((i-f1*0.42-3)/3.4,2));
+    const g=(a*0.9+b*0.55)*v;
+    if(g>bands[i]) bands[i]=g>1?1:g;
+  }
+  energy=Math.min(1,energy+0.22*v);
+  mid=Math.min(1,mid+0.2*v);
+  treble=Math.min(1,treble+0.15*v);
+}
+function synthBands(){
+  const p1=ph(1), p3=ph(3);
+  const kick=Math.pow(Math.max(0,Math.sin(ph(6))),6);
+  const snare=Math.pow(Math.max(0,Math.sin(ph(6)+Math.PI)),8);
+  const hat=Math.pow(Math.max(0,Math.sin(ph(12)+0.9)),14);
+  const swell=0.5+0.5*Math.sin(ph(2));
+  for(let i=0;i<NB;i++){
+    const f=i/(NB-1);
+    let v=0.11+0.05*Math.sin(i*0.9+p1)+0.04*Math.sin(i*2.3-p3);
+    v/=(1.0+f*1.7);
+    v+=kick*Math.exp(-f*7.0)*0.72;
+    v+=hat*Math.exp(-(1.0-f)*9.0)*0.45;
+    v+=snare*Math.exp(-Math.abs(f-0.42)*7.0)*0.30;
+    v+=swell*0.10*Math.exp(-Math.pow((f-0.30-0.15*Math.sin(p1))*4.0,2.0));
+    if(v<0)v=0; if(v>1)v=1;
+    bands[i]+=(v-bands[i])*0.35;
+  }
+}
+/* ===== rings (seeded, batched by alpha tier) ===== */
+const NR=36, TIERS=6, TIERF=[];
+for(let t=0;t<TIERS;t++) TIERF[t]=0.35+0.75*((t+0.5)/TIERS);
+let rings=[];
+
+function buildRings(){
+  let x=(seed||1)>>>0;
+  const rnd=()=>{ x=(x*1664525+1013904223)>>>0; return x/4294967296; };
+  rings=[];
+  for(let r=0;r<NR;r++){
+    const q=r/(NR-1);
+    const count=210+(r%5)*23;
+    const tiers=[]; for(let t=0;t<TIERS;t++) tiers.push([]);
+    const b1=r*0.16, b2=r;
+    for(let i=0;i<count;i++){
+      const a=i/count*TAU;
+      const n=rnd()*2-1, z=rnd();
+      const g1=a*2.1;
+      const A1=g1*1.73+b1*2.11, A2=g1*4.31-b1*0.91, A3=g1*9.7+b1*0.37;
+      const g2=a*5;
+      const B1=g2*1.73+b2*2.11, B2=g2*4.31-b2*0.91, B3=g2*9.7+b2*0.37;
+      const p={
+        ca:Math.cos(a), sa:Math.sin(a), n, z,
+        w:[Math.sin(A1),Math.cos(A1),Math.sin(A2),Math.cos(A2),Math.sin(A3),Math.cos(A3)],
+        w2:[Math.sin(B1),Math.cos(B1),Math.sin(B2),Math.cos(B2),Math.sin(B3),Math.cos(B3)],
+        bs:Math.sin(a*3), bc:Math.cos(a*3),
+        ns:Math.sin(z*8), nc:Math.cos(z*8),
+        sz:(0.35+1.5*z)*(1+0.9*q)
+      };
+      tiers[Math.min(TIERS-1,(z*TIERS)|0)].push(p);
+    }
+    rings.push({q,tiers,count});
+  }
+}
+buildRings();
+
+/* ===== spectrogram waterfall (phase-locked ring buffer) ===== */
+const SW=240, SH=64, STEP=LOOP/SW;
+const hist=new Uint8Array(SW*SH);
+const specOff=document.createElement('canvas'); specOff.width=SW; specOff.height=SH;
+const specCtx=specOff.getContext('2d');
+const specImg=specCtx.createImageData(SW,SH);
+let lastStep=-1;
+
+function writeCol(c){
+  const o=c*SH;
+  for(let i=0;i<NB;i++) hist[o+(SH-1-i)]=(bands[i]*255)|0;
+}
+function updateSpec(){
+  if(lastStep<0){
+    for(let c=0;c<SW;c++) writeCol(c);
+    lastStep=(tl/STEP)|0;
+    return;
+  }
+  const cur=(tl/STEP)|0;
+  if(cur===lastStep) return;
+  let s=lastStep, guard=0;
+  while(s!==cur&&guard++<SW){ s=(s+1)%SW; writeCol(s); }
+  lastStep=cur;
+}
+function drawSpec(){
+  const d=specImg.data, cur=lastStep;
+  for(let x=0;x<SW;x++){
+    const src=((cur+1+x)%SW)*SH;
+    for(let y=0;y<SH;y++){
+      const o=(y*SW+x)*4, v=hist[src+y];
+      d[o]=255; d[o+1]=255; d[o+2]=255; d[o+3]=v;
+    }
+  }
+  specCtx.putImageData(specImg,0,0);
+  const x=FX+FW*0.08, y=H*0.045, w=FW*0.84, h=H*0.085;
+  hctx.globalAlpha=0.92;
+  hctx.drawImage(specOff,x,y,w,h);
+  hctx.globalAlpha=1;
+  hctx.strokeStyle='#2c2c2c'; hctx.lineWidth=1;
+  hctx.strokeRect(x+0.5,y+0.5,w-1,h-1);
+  hctx.fillStyle='#585858';
+  hctx.font=(7*HS)+'px ui-monospace,SFMono-Regular,Menlo,monospace';
+  hctx.textBaseline='top'; hctx.textAlign='left';
+  hctx.fillText('SPECTRUM 20 Hz - 16 kHz',x,y+h+4);
+  hctx.textAlign='right';
+  hctx.fillText('240 COLS / 5.0 s LOOP',x+w,y+h+4);
+  hctx.textAlign='left';
+}
+/* ===== webgl field ===== */
+let gl=null, prog=null, U={}, tex=null, texData=new Uint8Array(NB*4), glOK=false;
+
+function compile(g,type,src){
+  const s=g.createShader(type);
+  g.shaderSource(s,src); g.compileShader(s);
+  if(!g.getShaderParameter(s,g.COMPILE_STATUS)){ console.warn(g.getShaderInfoLog(s)); return null; }
+  return s;
+}
+function initGL(){
+  try{
+    const o={alpha:false,antialias:false,depth:false,stencil:false,preserveDrawingBuffer:true};
+    gl=glc.getContext('webgl',o)||glc.getContext('experimental-webgl',o);
+  }catch(e){ gl=null; }
+  if(!gl) return false;
+  const vs='attribute vec2 a;void main(){gl_Position=vec4(a,0.0,1.0);}';
+  const fs=[
+  '#ifdef GL_FRAGMENT_PRECISION_HIGH','precision highp float;','#else','precision mediump float;','#endif',
+  'uniform vec2 uRes;uniform float uT;uniform float uSeed;uniform float uPass;',
+  'uniform float uEnergy;uniform float uTreble;uniform sampler2D uBands;',
+  'const float TAU=6.28318530718;const float LOOP=5.0;',
+  'float h11(float p){p=fract(p*0.1031);p*=p+33.33;p*=p+p;return fract(p);}',
+  'float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);',
+  ' float a=h11(i.x+i.y*57.0),b=h11(i.x+1.0+i.y*57.0),c=h11(i.x+(i.y+1.0)*57.0),d=h11(i.x+1.0+(i.y+1.0)*57.0);',
+  ' return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);}',
+  'float bd(float x){return texture2D(uBands,vec2((clamp(x,0.0,1.0)*63.0+0.5)/64.0,0.5)).r;}',
+  'void main(){',
+  // pass 0: multiplicative trail fade; pass 1: subtract one 8-bit step so faded trails reach true black
+  ' if(uPass<0.5){gl_FragColor=vec4(0.0,0.0,0.0,0.24);return;}',
+  ' if(uPass<1.5){gl_FragColor=vec4(vec3(1.0/255.0),0.0);return;}',
+  ' vec2 p=vec2(gl_FragCoord.x,uRes.y-gl_FragCoord.y);',
+  ' float sc=min(uRes.x/720.0,uRes.y/900.0);',
+  ' vec2 d=(p-vec2(uRes.x*0.5,uRes.y*0.505))/(245.0*sc);',
+  ' d.y*=1.0752688;', // 1/0.93, matches the 2D layers' vertical squash
+  ' float r=length(d),ang=atan(d.y,d.x);',
+  ' float ph1=TAU*uT/LOOP,ph3=ph1*3.0;',
+  ' vec3 col=vec3(0.0);',
+  ' float aa=ang-0.03*sin(ph1);',
+  ' float fi=fract(aa/TAU+0.5)*150.0;',
+  ' float id=floor(fi),f=fract(fi);',
+  ' float hs=h11(id*1.7+uSeed*0.013);',
+  ' float pulse=(0.5+0.5*sin(ph3+id*0.47+uSeed*0.0009));',
+  ' pulse*=0.40+1.15*bd(fract(id*0.0137+0.11));',
+  ' float r1=0.63+0.12*sin(id*0.71+ph1+hs*TAU);',
+  ' float r2=1.05+0.34*pulse*(0.75+0.5*uTreble);',
+  ' float lw=0.05+0.06*pulse;',
+  ' float line=1.0-smoothstep(0.0,lw,abs(f-0.5));',
+  ' float msk=smoothstep(r1,r1+0.06,r)*(1.0-smoothstep(r2-0.15,r2,r));',
+  ' col+=vec3(1.0)*line*msk*(0.014+0.032*clamp(pulse,0.0,1.6));',
+  ' float q=(r-0.23)/0.82;',
+  ' float bnd=bd(q);',
+  ' float dust=vn(vec2(ang*7.0+uSeed*0.31,r*16.0-ph1*0.35));',
+  ' float rm=smoothstep(0.14,0.34,r)*(1.0-smoothstep(0.90,1.20,r));',
+  ' col+=vec3(1.0)*bnd*rm*(0.020+0.055*dust)*(0.55+0.90*uEnergy);',
+  ' float sm=vn(vec2(ang*3.0+ph1*0.5,r*5.0+uSeed*0.07));',
+  ' col+=vec3(1.0)*(0.008+0.022*uTreble)*smoothstep(0.95,1.30,r)*(1.0-smoothstep(1.30,1.60,r))*sm;',
+  ' col*=smoothstep(0.30,0.62,r);',
+  ' col+=(h11(gl_FragCoord.x+gl_FragCoord.y*1919.0+uT*7.0)-0.5)*0.007;',
+  ' gl_FragColor=vec4(max(col,vec3(0.0)),1.0);',
+  '}'].join('\n');
+
+  const v=compile(gl,gl.VERTEX_SHADER,vs), f=compile(gl,gl.FRAGMENT_SHADER,fs);
+  if(!v||!f) return false;
+  prog=gl.createProgram(); gl.attachShader(prog,v); gl.attachShader(prog,f); gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog,gl.LINK_STATUS)){ console.warn(gl.getProgramInfoLog(prog)); return false; }
+  gl.useProgram(prog);
+  const buf=gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+  const loc=gl.getAttribLocation(prog,'a');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  ['uRes','uT','uSeed','uPass','uEnergy','uTreble','uBands'].forEach(k=>U[k]=gl.getUniformLocation(prog,k));
+  tex=gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D,tex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,NB,1,0,gl.RGBA,gl.UNSIGNED_BYTE,texData);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  gl.uniform1i(U.uBands,0);
+  gl.clearColor(0,0,0,1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  return true;
+}
+function drawGL(){
+  gl.viewport(0,0,glc.width,glc.height);
+  gl.enable(gl.BLEND);
+  gl.useProgram(prog);
+  gl.uniform2f(U.uRes,glc.width,glc.height);
+  gl.uniform1f(U.uT,tl);
+  gl.uniform1f(U.uSeed,seed%65536);
+  gl.uniform1f(U.uEnergy,energy);
+  gl.uniform1f(U.uTreble,treble);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D,tex);
+  for(let i=0;i<NB;i++){
+    texData[i*4]=(bands[i]*255)|0;
+    texData[i*4+1]=(bass*255)|0;
+    texData[i*4+2]=(treble*255)|0;
+    texData[i*4+3]=255;
+  }
+  gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,NB,1,gl.RGBA,gl.UNSIGNED_BYTE,texData);
+  gl.blendEquation(gl.FUNC_ADD);
+  gl.blendFunc(gl.ZERO,gl.ONE_MINUS_SRC_ALPHA);
+  gl.uniform1f(U.uPass,0);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+  gl.blendEquation(gl.FUNC_REVERSE_SUBTRACT);
+  gl.blendFunc(gl.ONE,gl.ONE);
+  gl.uniform1f(U.uPass,1);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+  gl.blendEquation(gl.FUNC_ADD);
+  gl.uniform1f(U.uPass,2);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+}
+/* ===== 2d layers ===== */
+const LV=16, MAXA=0.32;
+const bk=[]; for(let i=0;i<LV;i++) bk.push(new Uint16Array(NR*TIERS*2));
+const bn=new Uint16Array(LV), lva=new Float32Array(LV);
+const RS=[]; for(let r=0;r<NR;r++) RS.push({rr:0,wob:0,cw:1,sw:0,bcos:1,bsin:0,bnd:0});
+
+function drawStreaks2D(){
+  const base=245*SC;
+  for(let i=0;i<150;i++){
+    const a=(i/150)*TAU+Math.sin(ph(1))*0.03;
+    let pulse=0.5+0.5*Math.sin(ph(3)+i*0.47);
+    pulse*=0.45+1.1*bandAt((i*0.0137+0.11)%1);
+    const r1=base*(0.63+0.12*Math.sin(i*0.71+ph(1)));
+    const r2=base*(1.05+0.34*pulse*(0.75+0.5*treble));
+    const x1=Math.cos(a)*r1, y1=Math.sin(a)*r1*0.93;
+    const x2=Math.cos(a)*r2, y2=Math.sin(a)*r2*0.93;
+    ctx.strokeStyle='rgba(255,255,255,'+(0.014+0.03*Math.min(1.6,pulse)).toFixed(4)+')';
+    ctx.lineWidth=0.45*SC;
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  }
+}
+
+function drawParticles(){
+  const base=245*SC;
+  const p1=ph(1);
+  const k1c=Math.cos(p1), k1s=Math.sin(p1);
+  const k2c=Math.cos(p1*1.7), k2s=Math.sin(p1*1.7);
+  const k3c=Math.cos(p1*0.7), k3s=Math.sin(p1*0.7);
+  const c2=p1+2.7;
+  const m1c=Math.cos(c2), m1s=Math.sin(c2);
+  const m2c=Math.cos(c2*1.7), m2s=Math.sin(c2*1.7);
+  const m3c=Math.cos(c2*0.7), m3s=Math.sin(c2*0.7);
+  const S1=Math.sin(p1), C1=Math.cos(p1);
+
+  bn.fill(0);
+  for(let r=0;r<NR;r++){
+    const R=rings[r], q=R.q;
+    const bnd=bandAt(q);
+    const ringA=(0.035+0.11*Math.pow(q,0.55))*(0.5+0.95*bnd+0.35*energy);
+    const aw=0.018*Math.sin(p1+r*0.13);
+    const bp=-ph(2)+r*0.07;
+    const S=RS[r];
+    S.rr=base*(0.23+q*0.82)*(1+0.06*bnd+0.03*bass);
+    S.wob=1+0.055*Math.sin(ph(2)+r*0.37)+0.035*Math.sin(ph(4)-r*0.19);
+    S.cw=Math.cos(aw); S.sw=Math.sin(aw);
+    S.bcos=Math.cos(bp); S.bsin=Math.sin(bp);
+    S.bnd=bnd;
+    for(let t=0;t<TIERS;t++){
+      const a=ringA*TIERF[t];
+      if(a<0.004) continue;
+      let lv=(Math.sqrt(a/MAXA)*16)|0; if(lv>15)lv=15;
+      const arr=bk[lv], n=bn[lv];
+      arr[n]=r; arr[n+1]=t; bn[lv]=n+2;
+      lva[lv]=a;
+    }
+  }
+
+  for(let lv=0;lv<LV;lv++){
+    const n=bn[lv]; if(!n) continue;
+    ctx.fillStyle='rgba(255,255,255,'+lva[lv].toFixed(4)+')';
+    const arr=bk[lv];
+    for(let k=0;k<n;k+=2){
+      const r=arr[k], t=arr[k+1];
+      const R=RS[r], pts=rings[r].tiers[t], q=rings[r].q;
+      const outer=q>0.72;
+      for(let j=0;j<pts.length;j++){
+        const p=pts[j], w=p.w, w2=p.w2;
+        const wave=0.48*(w[0]*k1c+w[1]*k1s)+0.28*(w[2]*k2c+w[3]*k2s)+0.16*(w[5]*k3c+w[4]*k3s);
+        const u=p.bs*R.bcos+p.bc*R.bsin;
+        const bu=u>0?u*u*u*u*u:0;
+        let rad=R.rr*R.wob+base*(0.022*wave+0.045*p.n*(S1*p.nc+C1*p.ns)+0.08*bu*q*(0.5+1.2*R.bnd));
+        if(outer){
+          const n2=0.48*(w2[0]*m1c+w2[1]*m1s)+0.28*(w2[2]*m2c+w2[3]*m2s)+0.16*(w2[5]*m3c+w2[4]*m3s);
+          rad+=base*0.055*n2;
+        }
+        const x=(p.ca*R.cw-p.sa*R.sw)*rad;
+        const y=(p.ca*R.sw+p.sa*R.cw)*rad*0.93;
+        const sz=p.sz*SC;
+        ctx.fillRect(x,y,sz,Math.max(0.45,sz*0.34));
+      }
+    }
+  }
+}
+
+function drawCenter(base){
+  const g=ctx.createRadialGradient(0,0,0,0,0,base*0.58);
+  g.addColorStop(0,'rgba(0,0,0,0.98)');
+  g.addColorStop(0.38,'rgba(0,0,0,0.82)');
+  g.addColorStop(0.7,'rgba(0,0,0,0.18)');
+  g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.globalCompositeOperation='source-over';
+  ctx.fillStyle=g;
+  ctx.beginPath(); ctx.arc(0,0,base*0.6,0,TAU); ctx.fill();
+}
+function drawPetals(base){
+  ctx.save();
+  ctx.rotate(0.12*Math.sin(ph(1)));
+  ctx.globalCompositeOperation='source-over';
+  for(let k=0;k<9;k++){
+    const len=base*(0.22+0.16*(0.5+0.5*Math.sin(ph(1)+k*1.7)))*(0.85+0.55*bass);
+    ctx.rotate(TAU/9);
+    ctx.fillStyle='rgba(0,0,0,0.78)';
+    ctx.beginPath(); ctx.moveTo(0,0);
+    ctx.quadraticCurveTo(len*0.32,-len*0.2,len,0);
+    ctx.quadraticCurveTo(len*0.3,len*0.13,0,0);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+function drawInnerRing(base){
+  ctx.globalCompositeOperation='lighter';
+  for(let i=0;i<260;i++){
+    const a=i/260*TAU;
+    const r=base*(0.34+0.018*Math.sin(i*0.67+ph(4)));
+    const len=base*(0.035+0.065*(0.5+0.5*Math.sin(i*0.43-ph(3))))*(0.6+0.8*treble);
+    const al=(0.04+0.08*(i%7===0?1:0))*(0.55+0.7*mid);
+    ctx.strokeStyle='rgba(255,255,255,'+al.toFixed(4)+')';
+    ctx.lineWidth=0.5*SC;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a)*r,Math.sin(a)*r*0.93);
+    ctx.lineTo(Math.cos(a)*(r+len),Math.sin(a)*(r+len)*0.93);
+    ctx.stroke();
+  }
+}
+/* ===== hud: part of the artwork, so it lands in exports (transient UI lives in the DOM) ===== */
+function drawMeter(g,x,y,v){
+  const w=56*HS, h=8*HS;
+  g.strokeStyle='#555'; g.lineWidth=1;
+  g.strokeRect(x+0.5,y+0.5,w-1,h-1);
+  const bw=13*HS;
+  let bx=w*0.536+(v-0.5)*24*HS-bw/2;
+  if(bx<1)bx=1; if(bx>w-1-bw)bx=w-1-bw;
+  g.fillStyle='#fff';
+  g.fillRect(x+bx,y+1,bw,h-2);
+}
+function drawMark(g){
+  g.font='900 '+(24*HS)+'px Arial,Helvetica,sans-serif';
+  g.fillStyle='#eee';
+  g.textAlign='center'; g.textBaseline='middle';
+  g.save();
+  g.translate(W*0.5,H-H*0.023-20*HS);
+  g.transform(1,0,Math.tan(-4*Math.PI/180),1,0,0);
+  g.fillText('PUFFS',0,0);
+  g.restore();
+}
+function drawHUD(){
+  const g=hctx;
+  const narrow=(W/H)<=0.8;
+  g.textBaseline='top'; g.textAlign='left';
+  g.fillStyle='#eee';
+  g.font=(10*HS)+'px ui-monospace,SFMono-Regular,Menlo,monospace';
+  g.fillText(energy.toFixed(3),FX+FW*0.182,H*0.164);
+  const value=tl*370+45*Math.sin(ph(2))+25*bass;
+  g.fillText(value.toFixed(3),FX+FW*0.197,H*0.826);
+  drawMeter(g,FX+FW*0.462,H*0.164,bass);
+  drawMeter(g,FX+FW*0.462,H*0.826,treble);
+  g.fillStyle='#d8d8d8';
+  g.font=((narrow?7:8)*HS)+'px Arial,Helvetica,sans-serif';
+  g.textAlign=narrow?'right':'left';
+  const capX=narrow?FX+FW*0.91:FX+FW*0.736;
+  g.fillText('Realtime audio spectrogram',capX,H*0.747);
+  g.fillText('WebGL + Canvas, in the browser',capX,H*0.747+18*HS);
+  g.textAlign='left';
+  drawMark(g);
+}
+
+/* ===== capture ===== */
+let recState='idle', warmStart=0, recStart=0, recorder=null, comp=null, compCtx=null, chunks=[], recCancelled=false;
+const MIMES_AV=['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
+const MIMES=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'];
+const recording=()=>recState==='warm'||recState==='rec';
+
+function composite(){
+  if(!compCtx) return;
+  compCtx.globalCompositeOperation='source-over';
+  compCtx.fillStyle='#000';
+  compCtx.fillRect(0,0,comp.width,comp.height);
+  compCtx.drawImage(glc,0,0);
+  compCtx.drawImage(cv,0,0);
+  compCtx.drawImage(hv,0,0);
+}
+function endRec(){ recState='idle'; recorder=null; compCtx=null; comp=null; }
+function beginRec(){
+  try{
+    comp=document.createElement('canvas');
+    comp.width=cv.width; comp.height=cv.height;
+    compCtx=comp.getContext('2d');
+    const stream=comp.captureStream(60);
+    // include the playing file's audio; the mic and the synthetic driver are silent
+    const withAudio=recDest&&source==='file'&&audioEl&&!audioEl.paused;
+    if(withAudio) recDest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
+    let mime='';
+    for(const m of (withAudio?MIMES_AV:MIMES)){ if(MediaRecorder.isTypeSupported(m)){ mime=m; break; } }
+    recorder=mime?new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:12000000})
+                 :new MediaRecorder(stream);
+    chunks=[];
+    recCancelled=false;
+    recorder.ondataavailable=e=>{ if(e.data&&e.data.size) chunks.push(e.data); };
+    recorder.onstop=()=>{
+      if(recCancelled){ recCancelled=false; chunks=[]; endRec(); return; }
+      const type=recorder.mimeType||'video/webm';
+      const blob=new Blob(chunks,{type});
+      const ext=type.indexOf('mp4')>=0?'mp4':'webm';
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download='puffs-'+seed.toString(16)+'-5s.'+ext;
+      a.click();
+      setTimeout(()=>URL.revokeObjectURL(a.href),8000);
+      say('SAVED '+a.download,4500);
+      endRec();
+    };
+    recorder.start();
+    recState='rec'; recStart=elapsed;
+  }catch(e){
+    say('recorder failed ('+(e.name||e.message||'error')+')');
+    endRec();
+  }
+}
+function startCapture(){
+  if(recState!=='idle') return 'Already recording.';
+  if(typeof MediaRecorder==='undefined'||!cv.captureStream){
+    say('recording not supported in this browser'); return 'Recording is not supported in this browser.';
+  }
+  paused=false;
+  recState='warm'; warmStart=elapsed;
+  return 'Recording one seamless five second loop. It downloads when it finishes, in about ten seconds.';
+}
+function cancelCapture(msg){
+  if(recState==='warm'){ recState='idle'; say(msg,4500); }
+  else if(recState==='rec'){
+    recCancelled=true; recState='stopping';
+    try{ recorder.stop(); }catch(e){ endRec(); }
+    say(msg,4500);
+  }
+}
+function tickCapture(prevTl){
+  if(!recording()) return;
+  const wrapped=tl<prevTl;
+  if(recState==='warm'){
+    if(wrapped&&elapsed-warmStart>=LOOP) beginRec();
+  }else if(wrapped){
+    recState='stopping';
+    try{ recorder.stop(); }catch(e){ endRec(); }
+  }
+}
+function snapshot(){
+  const t=document.createElement('canvas');
+  t.width=cv.width; t.height=cv.height;
+  const tc=t.getContext('2d');
+  tc.fillStyle='#000'; tc.fillRect(0,0,t.width,t.height);
+  tc.drawImage(glc,0,0); tc.drawImage(cv,0,0); tc.drawImage(hv,0,0);
+  t.toBlob(b=>{
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(b);
+    a.download='puffs-'+seed.toString(16)+'.png';
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),8000);
+    say('SAVED '+a.download);
+  },'image/png');
+}
+
+/* ===== shared actions (keyboard, buttons, local brain and Claude tools all use these) ===== */
+function setPaused(p){
+  if(p&&recording()){ say('recording — pause blocked'); return "I can't pause while a loop is recording. It finishes in a few seconds."; }
+  paused=p; last=performance.now();
+  if(!p) settle=0;
+  say(p?'paused':'playing');
+  return p?pick('Paused.','Okay, holding the frame.','Frozen. Say play when you want it moving.')
+          :pick('Playing.','And we are moving again.','Back in motion.');
+}
+function setSeed(n){
+  seed=n>>>0;
+  buildRings();
+  try{
+    const u=new URL(location.href);
+    u.searchParams.set('seed',seed);
+    u.searchParams.delete('capture');
+    history.replaceState(null,'',u);
+  }catch(e){}
+  setHint(); invalidate();
+  say('SEED 0x'+hex(seed));
+  return 'Seed zero x '+hex(seed).replace(/^0+(?=.)/,'')+'.';
+}
+function reseed(){ return setSeed((Math.random()*4294967296)>>>0); }
+function setBoost(v){
+  boost=Math.max(0.35,Math.min(2.4,v)); invalidate();
+  say('BOOST '+boost.toFixed(2));
+  return 'Boost is '+num(boost)+'.';
+}
+function openFilePicker(){
+  fileInput.click();
+  return 'Opening the file picker. If nothing appears, press F or drop an audio file anywhere.';
+}
+
+/* ===== timers ===== */
+const timers=[]; let timerSeq=0;
+function fmtDur(s){
+  s=Math.round(s);
+  const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=s%60, p=[];
+  if(h) p.push(h+(h===1?' hour':' hours'));
+  if(m) p.push(m+(m===1?' minute':' minutes'));
+  if(x||!p.length) p.push(x+(x===1?' second':' seconds'));
+  return p.join(' and ');
+}
+function addTimer(sec,label,prep){
+  if(!(sec>0)||sec>86400) return 'Timers can run from one second up to a day.';
+  ensureCtx();
+  label=(label||'').trim().slice(0,40); prep=prep==='to'?'to':'for';
+  timers.push({id:++timerSeq,end:Date.now()+sec*1000,label,prep});
+  timers.sort((a,b)=>a.end-b.end);
+  return pick('Okay','Sure','Got it')+', '+fmtDur(sec)+(label?' '+prep+' '+label:'')+'. '+pick('Starting now.','I\'ll let you know.','The clock is running.');
+}
+function cancelTimers(){
+  const n=timers.length; timers.length=0;
+  return n?(n===1?'Timer cancelled.':'All '+n+' timers cancelled.'):'There are no timers running.';
+}
+function timerStatus(){
+  if(!timers.length) return 'No timers running.';
+  const now=Date.now();
+  return timers.map(t=>(t.label?t.label+': ':'')+fmtDur(Math.max(0,(t.end-now)/1000))+' left').join('. ')+'.';
+}
+function chime(){
+  if(!actx) return;
+  const t0=actx.currentTime;
+  for(let i=0;i<3;i++){
+    const o=actx.createOscillator(), g=actx.createGain();
+    o.frequency.value=880; o.type='sine';
+    g.gain.setValueAtTime(0.0001,t0+i*0.32);
+    g.gain.exponentialRampToValueAtTime(0.25,t0+i*0.32+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t0+i*0.32+0.26);
+    o.connect(g); g.connect(actx.destination);
+    o.start(t0+i*0.32); o.stop(t0+i*0.32+0.3);
+  }
+}
+function tickTimers(){
+  if(!timers.length) return;
+  const now=Date.now();
+  while(timers.length&&timers[0].end<=now){
+    const t=timers.shift();
+    const msg=!t.label?'Time is up.':t.prep==='to'?'Time to '+t.label+'.':'Time is up for '+t.label+'.';
+    chime(); say('TIMER DONE'+(t.label?' — '+t.label:''),8000);
+    notify(msg);
+  }
+}
+
+/* ===== speech output =====
+   Fluency comes from three things: the most natural voice the browser has, text rewritten the way
+   it should be said, and chunking — the first sentence goes out alone so speech starts at once,
+   then queued sentences are merged into longer utterances so the voice keeps one continuous
+   intonation instead of restarting on every full stop. */
+const TTS={q:[],cur:null,dog:0,waiters:[],first:true};
+const voicePrefs={name:lsGet('puffs.voice',''),rate:lsGet('puffs.rate',1)};
+let voices=[], rankedVoices=[];
+const NOVELTY=/\b(albert|bad news|bahh|bells|boing|bubbles|cellos|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|fred|junior|ralph|grandma|grandpa|rocko|shelley|eddy|flo|reed|sandy)\b/i;
+function voiceScore(v){
+  const want=(navigator.language||'en-US').toLowerCase();
+  const vl=(v.lang||'').toLowerCase().replace('_','-');
+  if(!vl.startsWith('en')) return -1;            // replies are English
+  let sc=want.startsWith('en')&&vl===want?30:vl==='en-us'||vl==='en-gb'?20:10;
+  if(/natural|neural/i.test(v.name)) sc+=60;      // Edge / Windows neural voices
+  if(/premium|enhanced|siri/i.test(v.name)) sc+=45; // Apple downloaded high-quality voices
+  if(/^google/i.test(v.name)) sc+=35;             // Chrome's network voices
+  if(/online/i.test(v.name)) sc+=15;
+  if(/\b(ava|samantha|allison|susan|zoe|evan|nathan|serena|daniel|karen|moira|tessa|aria|jenny|guy|libby|sonia|ryan|natasha)\b/i.test(v.name)) sc+=12;
+  if(/\b(zira|david|mark|hazel)\b/i.test(v.name)) sc-=8; // older SAPI voices
+  if(NOVELTY.test(v.name)) sc-=200;
+  if(v.localService===false) sc+=4;
+  return sc;
+}
+function loadVoices(){
+  voices=('speechSynthesis' in window&&speechSynthesis.getVoices())||[];
+  rankedVoices=voices.map(v=>[voiceScore(v),v]).filter(x=>x[0]>=0).sort((x,y)=>y[0]-x[0]).map(x=>x[1]);
+}
+if('speechSynthesis' in window){
+  loadVoices();
+  speechSynthesis.addEventListener('voiceschanged',loadVoices);
+}
+function pickVoice(){
+  if(!voices.length) loadVoices();
+  return (voicePrefs.name&&voices.find(v=>v.name===voicePrefs.name))||rankedVoices[0]||voices[0]||null;
+}
+function voiceLabel(v){
+  if(!v) return 'the default voice';
+  return v.name.replace(/^(Microsoft|Google|Apple)\s+/i,'').replace(/\s*\((Natural|Enhanced|Premium)\)/ig,'')
+    .replace(/\s+Online\b/i,'').replace(/\s+-\s+.*$/,'').trim();
+}
+function cycleVoice(){
+  if(!rankedVoices.length) loadVoices();
+  if(!rankedVoices.length) return "This browser doesn't offer other voices.";
+  const cur=pickVoice(), top=rankedVoices.slice(0,8);
+  const next=top[(top.indexOf(cur)+1)%top.length];
+  voicePrefs.name=next.name; lsSet('puffs.voice',next.name);
+  return "Hi, I'm using "+voiceLabel(next)+' now.';
+}
+function setRate(r){
+  voicePrefs.rate=Math.max(0.8,Math.min(1.35,Math.round(r*100)/100)); lsSet('puffs.rate',voicePrefs.rate);
+  return voicePrefs.rate>1.02?"Okay, I'll talk a bit faster.":voicePrefs.rate<0.98?"Sure, I'll slow down.":'Back to my normal pace.';
+}
+const SAY_UNITS={km:'kilometers',mi:'miles',kg:'kilograms',lb:'pounds',lbs:'pounds',mph:'miles per hour',kph:'kilometers per hour',ft:'feet',cm:'centimeters',mm:'millimeters',ml:'milliliters',oz:'ounces',hz:'hertz',khz:'kilohertz',ms:'milliseconds',mb:'megabytes',gb:'gigabytes'};
+function speechText(t){
+  return t
+    .replace(/```[\s\S]*?```/g,' ').replace(/`([^`]*)`/g,'$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/https?:\/\/\S+/g,'a link')
+    .replace(/^\s*(?:[-*•]|\d+[.)])\s+/gm,'').replace(/[*_#>|~]/g,'')
+    .replace(/\p{Extended_Pictographic}/gu,'')
+    .replace(/\be\.g\./gi,'for example').replace(/\bi\.e\./gi,'that is').replace(/\betc\./gi,'et cetera').replace(/\bvs\.?(?=\s)/gi,'versus')
+    .replace(/\s*&\s*/g,' and ')
+    .replace(/(\d)\s*°\s*C\b/g,'$1 degrees Celsius').replace(/(\d)\s*°\s*F\b/g,'$1 degrees Fahrenheit').replace(/°/g,' degrees')
+    .replace(/(\d)\s*(km|mi|kg|lbs?|mph|kph|ft|cm|mm|ml|oz|k?hz|ms|mb|gb)\b/gi,(m,n,u)=>n+' '+SAY_UNITS[u.toLowerCase()])
+    .replace(/\b0x([0-9a-f]+)\b/gi,(m,h)=>'zero x '+h.split('').join(' '))
+    .replace(/(\d)\s*[x×]\s*(\d)/g,'$1 times $2')
+    .replace(/\s+[—–-]\s+|—/g,', ')               // dashes become a breath, not "minus"
+    .replace(/\s*\(([^)]{1,80})\)\s*/g,', $1, ')  // asides read as asides
+    .replace(/([!?.]){2,}/g,'$1').replace(/\s*,\s*([.!?,])/g,'$1').replace(/,\s*,/g,',')
+    .replace(/\s+/g,' ').trim();
+}
+// sentence boundaries: end punctuation followed by space/end, never inside "1.35" or after a common abbreviation
+function splitSentences(t){
+  const out=[]; let start=0;
+  const re=/[.!?…]+["')\]]*(?=\s|$)/g; let m;
+  while((m=re.exec(t))){
+    const end=m.index+m[0].length;
+    if(/\b(mr|mrs|ms|dr|st|no|approx|mt|jr|sr)\.$/i.test(t.slice(Math.max(start,end-8),end))) continue;
+    out.push(t.slice(start,end).trim()); start=end;
+  }
+  if(start<t.length&&t.slice(start).trim()) out.push(t.slice(start).trim());
+  return out;
+}
+function ttsSay(text){
+  const t=speechText(text||'');
+  if(!t) return;
+  for(const p of splitSentences(t)) if(p) TTS.q.push(p);
+  ttsPump();
+}
+const MAX_CHUNK=230; // long single utterances get cut off in Chrome around 15 s
+function ttsPump(){
+  if(TTS.cur) return;
+  if(!TTS.q.length||!('speechSynthesis' in window)){ TTS.q.length=0; ttsSettle(); return; }
+  let text=TTS.q.shift();
+  if(!TTS.first) while(TTS.q.length&&text.length+1+TTS.q[0].length<=MAX_CHUNK) text+=' '+TTS.q.shift();
+  TTS.first=false;
+  const u=new SpeechSynthesisUtterance(text);
+  const v=pickVoice(); if(v){ u.voice=v; u.lang=v.lang; }
+  u.rate=voicePrefs.rate; u.pitch=1;
+  u.onboundary=()=>{ voiceEnv=1; };
+  const done=()=>{ if(TTS.cur!==u) return; clearTimeout(TTS.dog); TTS.cur=null; ttsPump(); };
+  u.onend=done; u.onerror=done;
+  TTS.cur=u; speaking=true; voiceEnv=1; setState('speaking');
+  TTS.dog=setTimeout(done,(5000+text.length*95)/voicePrefs.rate);
+  try{
+    if(speechSynthesis.paused) speechSynthesis.resume(); // Chrome can get stuck paused
+    speechSynthesis.speak(u);
+  }catch(e){ done(); }
+}
+function ttsSettle(){
+  if(TTS.cur||TTS.q.length) return;
+  speaking=false; TTS.first=true;
+  if(stateEl.dataset.s==='speaking') setState('');
+  const w=TTS.waiters; TTS.waiters=[]; w.forEach(f=>f());
+}
+function ttsCancel(){
+  TTS.q.length=0; TTS.cur=null; clearTimeout(TTS.dog);
+  try{ speechSynthesis.cancel(); }catch(e){}
+  ttsSettle();
+}
+function ttsIdle(){ return (TTS.cur||TTS.q.length)?new Promise(r=>TTS.waiters.push(r)):Promise.resolve(); }
+
+/* ===== assistant ===== */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+const sayEl=$('say'), askInput=$('ask'), stateEl=$('state');
+let assistantOn=false, sr=null, listening=false, srErrs=0, askTextMode=false, assistantMic=false;
+let turnId=0, turnBusy=false, lastReply='', lastCmd=null, listenTimer=0;
+const mem=lsGet('puffs.mem',{name:'',facts:[]});
+if(!Array.isArray(mem.facts)) mem.facts=[];
+const saveMem=()=>lsSet('puffs.mem',mem);
+
+function setState(s){
+  stateEl.dataset.s=s||'';
+  stateEl.querySelector('.lbl').textContent={listening:'listening',thinking:'thinking',speaking:'speaking',typing:'typing'}[s]||(assistantOn?'ready':'');
+  stateEl.querySelector('.brain').textContent=AI.key?'claude':'offline';
+  // while typing the text box itself is the indicator; the state line would only push the stack upward
+  stateEl.classList.toggle('on',s!=='typing'&&(assistantOn||!!s));
+  syncTalk();
+}
+function syncTalk(){ $('talk').classList.toggle('on',askTextMode||stateEl.classList.contains('on')||sayEl.classList.contains('on')); }
+function renderTalk(rows,hold){
+  const kids=[];
+  for(const [who,txt] of rows){
+    if(!txt) continue;
+    const d=document.createElement('div'); d.className='line '+({you:'u',puffs:'a'}[who]||'n');
+    const w=document.createElement('span'); w.className='who'; w.textContent=who==='note'?'':who;
+    const t=document.createElement('span'); t.textContent=txt;
+    d.append(w,t); kids.push(d);
+  }
+  sayEl.replaceChildren(...kids);
+  sayEl.classList.add('on'); syncTalk();
+  clearTimeout(renderTalk.t);
+  renderTalk.t=setTimeout(()=>{ sayEl.classList.remove('on'); if(!assistantOn&&!askTextMode) stateEl.classList.remove('on'); syncTalk(); },hold||14000);
+}
+function showExchange(u,r){ renderTalk([['you',u],['puffs',r]]); }
+function notify(msg){
+  // spoken announcement outside a conversation turn (timers)
+  stopListen();
+  renderTalk([['puffs',msg]]);
+  ttsSay(msg);
+  ttsIdle().then(scheduleListen);
+}
+
+function openAsk(prefill){
+  askTextMode=true;
+  stopListen();
+  closeMenu();
+  askInput.style.display='block';
+  askInput.value=prefill||'';
+  askInput.placeholder=AI.key?'ask puffs anything…':'ask puffs…   /key sk-ant-… connects Claude';
+  askInput.focus();
+  setState('typing');
+  if(!prefill) renderTalk([['note','enter to send · esc to close']],6000);
+}
+function closeAsk(){
+  askTextMode=false;
+  askInput.style.display='none';
+  askInput.blur();
+  setState('');
+  scheduleListen();
+}
+function scheduleListen(delay){
+  clearTimeout(listenTimer);
+  listenTimer=setTimeout(startListen,delay==null?350:delay);
+}
+function startListen(){
+  if(askTextMode||!assistantOn||listening||speaking||turnBusy) return;
+  if(!SR){ openAsk(); return; }
+  if(!sr){
+    sr=new SR();
+    sr.lang=navigator.language||'en-US';
+    sr.interimResults=true;
+    sr.continuous=false;
+    sr.maxAlternatives=1;
+    sr.onresult=e=>{
+      let interim='';
+      for(let i=e.resultIndex;i<e.results.length;i++){
+        const r=e.results[i];
+        if(r.isFinal){ srErrs=0; const txt=r[0].transcript; stopListen(); ask(txt); return; }
+        interim+=r[0].transcript;
+      }
+      if(interim) renderTalk([['you',interim]]);
+    };
+    sr.onerror=e=>{
+      const err=e.error||'error';
+      listening=false;
+      if(err==='aborted'||err==='no-speech') return; // onend restarts
+      if(err==='not-allowed'||err==='service-not-allowed'){ say('speech recognition blocked — typing instead',4000); openAsk(); return; }
+      if(err==='network'){ say('speech recognition needs a network connection — typing instead',5000); openAsk(); return; }
+      srErrs++;
+      say('speech ('+err+')',3500);
+      if(srErrs>=3) openAsk();
+    };
+    sr.onend=()=>{
+      listening=false;
+      if(stateEl.dataset.s==='listening') setState('');
+      if(assistantOn&&!askTextMode&&!speaking&&!turnBusy) scheduleListen(500);
+    };
+  }
+  try{ sr.start(); listening=true; setState('listening'); }
+  catch(e){ /* already running */ }
+}
+function stopListen(){
+  clearTimeout(listenTimer);
+  if(sr&&listening){ try{ sr.abort(); }catch(e){} }
+  listening=false;
+}
+function interrupt(){
+  turnId++; turnBusy=false;
+  abortClaude();
+  ttsCancel();
+}
+function toggleAssistant(){
+  if(assistantOn){
+    assistantOn=false;
+    interrupt(); stopListen();
+    speaking=false; voiceEnv=0;
+    if(askTextMode){ askTextMode=false; askInput.style.display='none'; askInput.blur(); }
+    sayEl.classList.remove('on');
+    setState(''); stateEl.classList.remove('on'); syncTalk();
+    say('assistant off');
+    if(assistantMic){
+      assistantMic=false;
+      if(source==='mic'){
+        stopMic();
+        if(prevReal==='file'&&audioEl){ source='file'; audioEl.play().catch(()=>{}); say('file on'); }
+        else source='synth';
+      }
+    }
+    return;
+  }
+  assistantOn=true;
+  ensureCtx();
+  say('assistant on — V to stop, esc to interrupt');
+  setState('');
+  const wasMic=source==='mic';
+  (async()=>{
+    if(!wasMic) assistantMic=await toMic();
+    if(!lsGet('puffs.greeted',false)){
+      lsSet('puffs.greeted',true);
+      ask('hello');
+    }else startListen();
+  })();
+}
+
+async function ask(raw){
+  const q=(raw||'').trim();
+  if(!q) return;
+  interrupt();
+  stopListen();
+  const id=turnId;
+  if(q[0]==='/'){ slash(q); return; }
+  turnBusy=true; setState('thinking');
+  showExchange(q,'');
+  const local=brain(q);
+  if(local&&local.r===null){ turnBusy=false; setState(''); scheduleListen(); return; }
+  if(local&&(local.kind==='cmd'||!AI.key)){
+    respond(q,local.r);
+    if(AI.key) AI.history.push({role:'user',content:q},{role:'assistant',content:local.r});
+  }else if(AI.key){
+    const ok=await claudeTurn(id,q);
+    if(!ok&&id===turnId) respond(q,local?local.r:FALLBACK);
+  }else respond(q,FALLBACK);
+  if(id!==turnId) return;
+  await ttsIdle();
+  if(id!==turnId) return;
+  turnBusy=false; setState('');
+  if(local&&local.after) local.after();
+  else scheduleListen();
+}
+function respond(q,text){ lastReply=text; showExchange(q,text); ttsSay(text); }
+const FALLBACK="I don't know that one yet. Say help to hear what I can do, or connect Claude for open questions.";
+
+function slash(q){
+  const [cmd,...rest]=q.slice(1).split(/\s+/);
+  const arg=rest.join(' ').trim();
+  let msg;
+  if(cmd==='key'){
+    if(!arg||arg==='off'){ AI.key=''; AI.client=null; AI.history=[]; lsSet('puffs.key',null); msg='Claude disconnected. Back to the offline brain.'; }
+    else if(!/^sk-ant-/.test(arg)){ msg="That doesn't look like an Anthropic API key. It should start with s k dash ant."; }
+    else{ AI.key=arg; AI.client=null; AI.history=[]; lsSet('puffs.key',arg); msg='Claude connected. Ask me anything.'; loadSDK().catch(()=>{}); }
+    showExchange('/key '+(arg&&arg!=='off'?'••••••••':arg),msg);
+  }else if(cmd==='voice'){
+    if(arg==='list'){
+      if(!rankedVoices.length) loadVoices();
+      msg='Voices: '+rankedVoices.slice(0,8).map(voiceLabel).join(', ')+'.';
+    }else if(arg){
+      const v=rankedVoices.find(x=>voiceLabel(x).toLowerCase().includes(arg.toLowerCase())||x.name.toLowerCase().includes(arg.toLowerCase()));
+      if(v){ voicePrefs.name=v.name; lsSet('puffs.voice',v.name); msg="Hi, I'm "+voiceLabel(v)+'.'; }
+      else msg="I couldn't find a voice called "+arg+'. Try slash voice list.';
+    }else msg=cycleVoice();
+    showExchange(q,msg);
+  }else if(cmd==='reset'){
+    AI.history=[]; msg='Fresh conversation.'; showExchange(q,msg);
+  }else{
+    msg='Commands: slash key followed by your key, slash key off, slash voice, slash voice list, slash reset.'; showExchange(q,msg);
+  }
+  setState('');
+  lastReply=msg; ttsSay(msg);
+  ttsIdle().then(scheduleListen);
+}
+
+/* ----- offline brain ----- */
+const SMALL={zero:0,one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12,thirteen:13,fourteen:14,fifteen:15,sixteen:16,seventeen:17,eighteen:18,nineteen:19,twenty:20,thirty:30,forty:40,fifty:50,sixty:60,seventy:70,eighty:80,ninety:90};
+const MULT={hundred:100,thousand:1000,million:1e6};
+const NUMWORD=new RegExp('\\b(?:'+Object.keys(SMALL).concat(Object.keys(MULT)).join('|')+')(?:[\\s-]+(?:and[\\s-]+)?(?:'+Object.keys(SMALL).concat(Object.keys(MULT)).join('|')+'))*\\b','g');
+function wordsToNumbers(s){
+  return s.replace(NUMWORD,m=>{
+    let total=0,cur=0;
+    for(const w of m.split(/[\s-]+/)){
+      if(w==='and') continue;
+      if(w in SMALL) cur+=SMALL[w];
+      else if(w==='hundred') cur=(cur||1)*100;
+      else { total+=(cur||1)*MULT[w]; cur=0; }
+    }
+    return String(total+cur);
+  });
+}
+function normalize(raw){
+  let s=raw.toLowerCase()
+    .replace(/×/g,' times ').replace(/÷/g,' divided by ').replace(/[−–]/g,'-')
+    .replace(/(\d),(?=\d{3}\b)/g,'$1')
+    .replace(/['’]/g,'')
+    .replace(/[^a-z0-9+\-*/%.:()^ ]/g,' ')
+    .replace(/\s+/g,' ').trim();
+  return wordsToNumbers(s);
+}
+function num(v){
+  const a=Math.abs(v);
+  const r=a>=1000?Math.round(v):a>=1?Math.round(v*100)/100:+v.toPrecision(3);
+  return String(r);
+}
+function mathOf(t){
+  let s=' '+t+' ';
+  const sq=t.match(/^(?:what is |whats )?(?:the )?square root of\s*(\d+(?:\.\d+)?)$/);
+  if(sq) return {expr:'sqrt '+sq[1],v:Math.sqrt(+sq[1]),direct:true};
+  s=s.replace(/square root of\s*(\d+(?:\.\d+)?)/g,(m,a)=>' '+Math.sqrt(+a)+' ')
+     .replace(/(\d+(?:\.\d+)?)\s*(?:percent|%)\s*of\s*(\d+(?:\.\d+)?)/g,'($1/100*$2)')
+     .replace(/\bsquared\b/g,'**2').replace(/\bcubed\b/g,'**3')
+     .replace(/\b(?:to the power of|raised to(?: the power of)?)\b|\^/g,'**')
+     .replace(/\bplus\b/g,'+').replace(/\bminus\b/g,'-')
+     .replace(/\b(?:times|multiplied by|x)\b/g,'*')
+     .replace(/\b(?:divided by|over)\b/g,'/');
+  const cands=s.match(/-?[\d(.][\d\s.+\-*/()]*[\d)]/g)||[];
+  for(const c of cands.sort((a,b)=>b.length-a.length)){
+    if(!/[\d)]\s*(?:\*\*|[+\-*/])\s*[(\-]*\s*[\d.(]/.test(c)) continue;
+    let depth=0, ok=true;
+    for(const ch of c){ if(ch==='(')depth++; else if(ch===')'&&--depth<0){ ok=false; break; } }
+    if(!ok||depth) continue;
+    try{
+      const v=Function('"use strict";return('+c+')')();
+      if(typeof v==='number'&&isFinite(v)) return {expr:c.trim(),v};
+      if(typeof v==='number') return {expr:c.trim(),v:NaN};
+    }catch(e){}
+  }
+  return null;
+}
+const UNITS={
+  km:['len',1000],kilometer:['len',1000],kilometre:['len',1000],m:['len',1],meter:['len',1],metre:['len',1],
+  cm:['len',0.01],centimeter:['len',0.01],centimetre:['len',0.01],mm:['len',0.001],millimeter:['len',0.001],
+  mi:['len',1609.344],mile:['len',1609.344],ft:['len',0.3048],foot:['len',0.3048],feet:['len',0.3048],
+  inch:['len',0.0254],inche:['len',0.0254],yard:['len',0.9144],yd:['len',0.9144],
+  kg:['mass',1],kilo:['mass',1],kilogram:['mass',1],g:['mass',0.001],gram:['mass',0.001],
+  lb:['mass',0.45359237],lbs:['mass',0.45359237],pound:['mass',0.45359237],oz:['mass',0.028349523125],ounce:['mass',0.028349523125],stone:['mass',6.35029318],
+  l:['vol',1],liter:['vol',1],litre:['vol',1],ml:['vol',0.001],milliliter:['vol',0.001],millilitre:['vol',0.001],
+  gallon:['vol',3.785411784],cup:['vol',0.2365882365],pint:['vol',0.473176473],
+  mph:['speed',0.44704],kph:['speed',1/3.6],kmh:['speed',1/3.6],
+  c:['temp','c'],celsius:['temp','c'],centigrade:['temp','c'],f:['temp','f'],fahrenheit:['temp','f'],kelvin:['temp','k']
+};
+function unitOf(w){
+  if(!w) return null;
+  if(UNITS[w]) return UNITS[w];
+  if(w.endsWith('s')&&UNITS[w.slice(0,-1)]) return UNITS[w.slice(0,-1)];
+  return null;
+}
+function convert(t){
+  const s=t.replace(/\bdegrees?\b/g,' ').replace(/\bkm h\b|\bkm per hour\b|\bkilometers per hour\b/g,'kph').replace(/\bmiles per hour\b/g,'mph').replace(/\s+/g,' ');
+  let m=s.match(/(-?\d+(?:\.\d+)?)\s*([a-z]+)\s+(?:in|to|into|as)\s+([a-z]+)/), v,a,b,an,bn;
+  if(m){ v=+m[1]; an=m[2]; bn=m[3]; }
+  else{
+    m=s.match(/how many ([a-z]+) (?:are |is )?(?:in |there in )?(-?\d+(?:\.\d+)?)\s*([a-z]+)/);
+    if(!m) return null;
+    v=+m[2]; an=m[3]; bn=m[1];
+  }
+  a=unitOf(an); b=unitOf(bn);
+  if(!a||!b||a[0]!==b[0]) return null;
+  let r;
+  if(a[0]==='temp'){
+    const c=a[1]==='c'?v:a[1]==='f'?(v-32)*5/9:v-273.15;
+    r=b[1]==='c'?c:b[1]==='f'?c*9/5+32:c+273.15;
+  }else r=v*a[1]/b[1];
+  const nm=(u,w)=>u[0]==='temp'?{c:'degrees Celsius',f:'degrees Fahrenheit',k:'kelvin'}[u[1]]:w;
+  return num(v)+' '+nm(a,an)+' is '+num(r)+' '+nm(b,bn)+'.';
+}
+function parseDuration(t){
+  let s=0, hit=false;
+  const re=/(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b/g; let m;
+  while((m=re.exec(t))){ hit=true; const u=m[2][0]; s+=(+m[1])*(u==='h'?3600:u==='m'?60:1); }
+  if(/\bhalf an hour\b/.test(t)){ s+=1800; hit=true; }
+  else if(/\ban hour\b/.test(t)){ s+=3600; hit=true; }
+  if(/\ba minute\b/.test(t)){ s+=60; hit=true; }
+  if(/\band a half\b/.test(t)&&hit){
+    const unit=/hour/.test(t)?3600:/minute/.test(t)?60:0; s+=unit/2;
+  }
+  return hit?s:0;
+}
+const pick=(...a)=>a[Math.floor(Math.random()*a.length)];
+const JOKES=[
+  'Why did the phase oscillator cross the road? To reach the other zero crossing.',
+  "I told a joke about the Nyquist frequency. Half of it didn't come through.",
+  'A sine wave walks into a bar. The bartender says, why the long period?',
+  "My loop is only five seconds long, so I never get to the punchline. Wait, there it is.",
+];
+let jokeIx=0;
+function brain(raw){
+  const t=normalize(raw);
+  const is=re=>re.test(t);
+  const now=new Date();
+  const R=(r,kind,extra)=>Object.assign({r,kind:kind||'cmd'},extra||{});
+
+  if(!t) return null;
+  if(is(/\b(stop talking|be quiet|shut up|silence|hush|never ?mind|cancel that)\b/)){ ttsCancel(); return R(null); }
+  if(is(/\b(disconnect|turn off|disable) (claude|the ai|ai)\b/)){ slash('/key off'); return R(null); }
+  if(is(/\b(connect|use|enable|add) (claude|the ai|ai)\b|\bapi key\b/)){
+    openAsk('/key ');
+    return R('Paste your Anthropic API key into the box after slash key and press enter. It stays in this browser.');
+  }
+
+  // timers
+  if(is(/\b(cancel|stop|clear|delete|remove) (the |my |all |all the )?timers?\b/)) return R(cancelTimers());
+  if(is(/\bhow (much )?(long|time) (is )?(left|remaining)\b|\btimers? status\b|\bany timers\b/)) return R(timerStatus());
+  if(is(/\btimer\b|\bremind me in\b|\bcount ?down\b|\bwake me in\b/)){
+    const sec=parseDuration(t);
+    if(!sec) return R('How long should the timer be? Say something like set a timer for five minutes.');
+    const lm=t.match(/\b(to|for|called|named|labelled|labeled)\s+(?!\d)([a-z][a-z ]{1,38})$/);
+    const ok=lm&&!/\b(hours?|minutes?|seconds?|mins?|secs?)\b/.test(lm[2]);
+    return R(addTimer(sec,ok?lm[2]:'',ok&&lm[1]==='to'?'to':'for'));
+  }
+
+  // maths and conversions
+  const conv=convert(t);
+  if(conv) return R(conv);
+  const mt=mathOf(t);
+  if(mt&&(mt.direct||is(/\b(what|whats|how much|calculate|compute|equals?|is)\b|=/)||mt.expr.replace(/\s/g,'').length>=t.replace(/\s/g,'').length*0.6)){
+    return R(isFinite(mt.v)?num(mt.v)+'.':"That one doesn't have an answer. Dividing by zero, maybe?");
+  }
+
+  // clock and calendar
+  if(is(/\bwhat time\b|\bthe time\b|\btime is it\b/))
+    return R(pick("It's ","It's just about ","Right now it's ")+now.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+'.');
+  if(is(/\b(what|which) (day|date)\b|\btodays date\b|\bthe date\b|\bdate today\b/)){
+    const d=new Date(now);
+    let when='Today is ';
+    if(is(/\btomorrow\b/)){ d.setDate(d.getDate()+1); when='Tomorrow is '; }
+    else if(is(/\byesterday\b/)){ d.setDate(d.getDate()-1); when='Yesterday was '; }
+    return R(when+d.toLocaleDateString([],{weekday:'long',month:'long',day:'numeric'})+'.');
+  }
+
+  // chance
+  if(is(/\b(flip|toss) (a )?coin\b|\bheads or tails\b/)) return R(Math.random()<0.5?'Heads.':'Tails.');
+  let m=t.match(/\broll\b.*?\b(?:(\d+) )?(?:dice|die|d(\d+))\b/);
+  if(m){
+    const n=Math.min(10,+(m[1]||1)), sides=+(m[2]||6); let sum=0; const rolls=[];
+    for(let i=0;i<n;i++){ const r=1+Math.floor(Math.random()*sides); rolls.push(r); sum+=r; }
+    return R(n>1?'You rolled '+rolls.join(', ')+'. Total '+sum+'.':'You rolled '+(/^(8|11|18)$/.test(String(sum))?'an ':'a ')+sum+'.');
+  }
+  if(is(/\brandom number\b|\bpick a number\b/)){
+    m=t.match(/(-?\d+)\D+?(-?\d+)/);
+    let lo=1,hi=100; if(m){ lo=Math.min(+m[1],+m[2]); hi=Math.max(+m[1],+m[2]); }
+    return R(String(lo+Math.floor(Math.random()*(hi-lo+1)))+'.');
+  }
+
+  // memory
+  m=t.match(/^(?:my name is|call me|i am called|im called) ([a-z][a-z ]{0,30})$/);
+  if(m){ mem.name=m[1].replace(/\b[a-z]/g,c=>c.toUpperCase()); saveMem(); return R('Nice to meet you, '+mem.name+'.'); }
+  if(is(/\bwhat is my name\b|\bwhats my name\b|\bwho am i\b/))
+    return R(mem.name?'You are '+mem.name+'.':"You haven't told me. Say my name is, then your name.");
+  m=t.match(/^(?:please )?remember (?:that )?(.{3,160})$/);
+  if(m){ mem.facts.push(m[1]); if(mem.facts.length>30) mem.facts.shift(); saveMem(); return R(pick("Got it. I'll remember that.","Noted. I won't forget.","Okay, I'll keep that in mind.")); }
+  if(is(/\bwhat do you (remember|know about me)\b/)){
+    if(!mem.facts.length&&!mem.name) return R("Nothing yet. Say remember that, and then whatever you like.");
+    return R((mem.name?'Your name is '+mem.name+'. ':'')+(mem.facts.length?'You told me: '+mem.facts.slice(-5).join('; ')+'.':''));
+  }
+  if(is(/\bforget (everything|all|it all|about me)\b/)){ mem.name=''; mem.facts=[]; saveMem(); AI.history=[]; return R('Done. My memory is empty.'); }
+
+  if(/^(say that again|repeat( that)?|what did you say|come again|pardon)\b/.test(t))
+    return R(lastReply||"I haven't said anything yet.");
+
+  // the voice itself
+  if(is(/\b(speak|talk) (a bit |a little |much )?(faster|quicker)\b|\bspeed up\b/)) return R(setRate(voicePrefs.rate+0.1));
+  if(is(/\b(speak|talk) (a bit |a little |much )?(slower|more slowly)\b|\bslow down\b/)) return R(setRate(voicePrefs.rate-0.1));
+  if(is(/\bnormal (speed|pace)\b/)) return R(setRate(1));
+  if(is(/\b(change|switch|swap)( your| the)? voice\b|\b(different|another|next|new) voice\b/)) return R(cycleVoice());
+  if(is(/\b(what|which) voice\b/)) return R("I'm using "+voiceLabel(pickVoice())+'. Say change your voice to try another.');
+
+  // the visual
+  if(is(/\b(load|open|choose|play|pick|use) (a |an |some |my )?(audio )?(file|song|track|music)\b/)) return R(openFilePicker());
+  if(is(/\b(audio off|turn off (the )?(mic|microphone|audio|sound|music)|stop (the )?(mic|music|song|audio)|synthetic( beat)?)\b/)){ audioOff(); return R('Audio off. The synthetic beat is driving the rings.'); }
+  if(is(/\b(microphone|use the mic|turn on the mic|mic on|listen to me|my voice)\b/)){
+    toMic(); return R('Listening to your microphone. Your voice drives the rings.');
+  }
+  if(is(/\bwhat (are you|is) (listening|hearing|playing)\b|\b(audio|sound) source\b/))
+    return R({mic:'Your microphone.',file:'The audio file you loaded.',synth:'My own synthetic beat. Nothing external.'}[source]);
+  if(is(/\b(stop|cancel) (the )?recording\b/)){
+    if(!recording()) return R('Nothing is recording.');
+    cancelCapture('recording cancelled'); return R('Recording cancelled.');
+  }
+  if(/^(please )?(record|capture)\b/.test(t)||is(/\b(record|capture) (the |a |this )?(loop|video|it)\b|\bmake a video\b|\bexport (the )?(loop|video)\b/)) return R(startCapture());
+  if(is(/\b(screenshot|take a picture|snapshot|save a png|save (a |the )?(still|frame|image))\b/)){ snapshot(); return R('Saving a still frame.'); }
+  if(t==='stop'||is(/\b(pause|freeze|hold the frame|stop moving|hold still)\b/)) return R(setPaused(true));
+  if(/^(play|continue|go|start)( please)?$/.test(t)||is(/\b(resume|unpause|keep going|start moving|start again|play again)\b/)) return R(setPaused(false));
+  m=t.match(/\b(?:set|change|use|make)? ?(?:the )?seed (?:to |at |number )?(\d+)\b/);
+  if(m) return R(setSeed(+m[1]));
+  if(is(/\b(reseed|random seed|new seed|change the seed|randomi[sz]e|surprise me|something new|shuffle|new composition)\b/)){ lastCmd=reseed; return R(reseed()); }
+  if(is(/\b(what is the seed|whats the seed|current seed|which seed)\b/))
+    return R('Seed is zero x '+hex(seed).replace(/^0+(?=.)/,'')+'.');
+  if(is(/\b(louder|brighter|turn it up|boost|more intense|stronger|crank it)\b/)){ lastCmd=()=>setBoost(boost*1.35); return R(lastCmd()); }
+  if(is(/\b(quieter|dimmer|turn it down|softer|calmer|less intense|weaker)\b/)){ lastCmd=()=>setBoost(boost*0.74); return R(lastCmd()); }
+  if(is(/\b(normal|reset)( the)? (boost|brightness|level)\b|\bback to normal\b/)) return R(setBoost(1));
+  if(lastCmd&&is(/^(more|again|even more|once more|another|do it again|one more)( please)?$/)) return R(lastCmd());
+  if(is(/\bhow many particles\b|\bparticle count\b|\bcount the particles\b/)){
+    let n=0; for(const r of rings) n+=r.count;
+    return R(n+' particles across '+rings.length+' rings.');
+  }
+  if(/^(help|commands|options)( me)?( please)?$/.test(t)||is(/\bwhat (can|do) you do\b/))
+    return R('I can control the visual: pause, play, record, screenshot, reseed, louder, quieter, microphone, or load a file. I also do timers, maths, unit conversions, the time and date, coin flips, dice, and I remember things you tell me.'+(AI.key?' Anything else goes to Claude.':' Connect Claude for open questions.'));
+  if(/^(bye|goodbye|good night|see you|later|thats all)\b/.test(t))
+    return R('Looping. Press V when you want me back.','cmd',{after:()=>{ if(assistantOn) toggleAssistant(); }});
+
+  // small talk: handled locally offline, by Claude when connected
+  if(/^(hi|hey|hello|yo|hiya|howdy)\b/.test(t)||is(/\bgood (morning|afternoon|evening)\b/))
+    return R(pick('Hello','Hi','Hey there')+(mem.name?', '+mem.name:'')+". I'm Puffs, a spectrogram that loops every five seconds. "+pick('Ask me anything, or say help.','What can I do for you?','Say help if you want ideas.'),'chat');
+  if(is(/\b(who are you|what are you|your name|are you an ai|are you a bot)\b/))
+    return R("I'm Puffs. Out of the box I'm a small offline rulebook inside a five second loop"+(AI.key?', with Claude for the hard questions.':'.'),'chat');
+  if(is(/\b(what is this|what am i looking at|describe|explain|how does this work)\b/))
+    return R('Sixty four frequency bands drive about nine thousand particles around a black void. A shader draws a hundred and fifty radial streaks, and all of it repeats exactly every five seconds.','chat');
+  if(is(/\bhow are you\b/)) return R(pick('Sixty frames a second and feeling round. How about you?',"Pretty good. Looping nicely. You?"),'chat');
+  if(is(/\b(joke|make me laugh|something funny)\b/)) return R(JOKES[jokeIx++%JOKES.length],'chat');
+  if(is(/\b(weather|temperature outside|how hot|how cold|forecast|news)\b/))
+    return R("I can't see outside. I only know twenty hertz to sixteen kilohertz.",'chat');
+  if(is(/\b(how long is the loop|five second|the loop)\b/))
+    return R('Exactly five seconds. Say record and I will hand you the whole loop as a video.','chat');
+  if(is(/\b(thank|thanks|cheers)\b/)) return R(pick('Anytime.',"You're welcome.",'Happy to help.','Of course.'),'chat');
+  if(is(/\bsing\b/)) return R('La la la. Twenty hertz to sixteen kilohertz.','chat');
+  if(is(/\bare you (real|alive)\b/)) return R('Alive enough to keep the same five seconds forever.','chat');
+  return null;
+}
+
+/* ----- Claude (optional; only used after the user pastes an API key) ----- */
+const AI={key:lsGet('puffs.key',''),model:'claude-opus-5-5',client:null,history:[],pending:null};
+// interrupting rolls the in-flight turn back synchronously, so the next turn never races its cleanup
+function abortClaude(){
+  const p=AI.pending; if(!p) return;
+  AI.pending=null;
+  AI.history.length=p.mark;
+  AI.history.push({role:'user',content:p.q},{role:'assistant',content:(p.shown().trim()||'…')+' (interrupted)'});
+  p.ctrl.abort();
+}
+let sdkP=null;
+function loadSDK(){
+  return sdkP||(sdkP=import('https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.128.0/+esm').catch(e=>{ sdkP=null; throw e; }));
+}
+const SYSTEM=`You are Puffs, the voice assistant living inside a realtime audio-reactive spectrogram artwork in the user's web browser. The artwork is about nine thousand monochrome particles on 36 rings around a black void, driven by 64 frequency bands from 20 Hz to 16 kHz, and it loops seamlessly every five seconds.
+
+Everything you write is read aloud by text-to-speech and shown as a caption, so write the way a warm, articulate person actually talks: contractions, natural rhythm, a mix of short and longer sentences, and the answer first. Usually one to three sentences. Don't restate the question, don't open with filler like "Great question", and don't sign off with offers of more help. No markdown, lists, emoji, code, URLs or parenthetical asides unless the user asks; when several items matter, weave them into a sentence. Write numbers, units and symbols the way you'd say them ("about twenty kilometers", "seventy percent"). If the user wants detail, give it, still in speakable paragraphs.
+
+Use the tools when the user wants to change the visual, set or cancel timers, or have you remember something. After a tool runs, confirm briefly in your own words. A file can only be opened by the user pressing F or dropping one on the page.
+
+Each user message starts with a bracketed context line (local time, visual state, timers, what the user asked you to remember). Use it when relevant and don't read it back. You have no internet access, so for live information like weather, news or prices, say you can't check it.`;
+const strictObj=(props,req)=>({type:'object',properties:props,required:req,additionalProperties:false});
+const TOOLS=[
+  {name:'control_visual',strict:true,description:'Pause or play the animation, pick a new random seed (a new composition), save a PNG still, or record the five second loop as a WebM video.',
+    input_schema:strictObj({action:{type:'string',enum:['pause','play','reseed','screenshot','record']}},['action'])},
+  {name:'set_seed',strict:true,description:'Set the composition seed to a specific integer between 0 and 4294967295.',
+    input_schema:strictObj({seed:{type:'integer'}},['seed'])},
+  {name:'set_boost',strict:true,description:'Set how strongly audio drives the visual. 1 is normal, 0.35 is the calmest, 2.4 the most intense.',
+    input_schema:strictObj({level:{type:'number'}},['level'])},
+  {name:'set_audio_source',strict:true,description:"Choose what drives the visual: the user's microphone, or off (built-in synthetic beat).",
+    input_schema:strictObj({source:{type:'string',enum:['mic','off']}},['source'])},
+  {name:'set_timer',strict:true,description:'Start a countdown timer that chimes and is announced aloud when it ends. Label may be an empty string.',
+    input_schema:strictObj({seconds:{type:'number'},label:{type:'string'}},['seconds','label'])},
+  {name:'cancel_timers',strict:true,description:'Cancel every running timer.',input_schema:strictObj({},[])},
+  {name:'remember',strict:true,description:'Store a short fact about the user that persists across visits in this browser.',
+    input_schema:strictObj({fact:{type:'string'}},['fact'])},
+  {name:'forget_everything',strict:true,description:'Erase everything remembered about the user.',input_schema:strictObj({},[])},
+];
+function runTool(name,input){
+  const i=input&&typeof input==='object'?input:{};
+  switch(name){
+    case 'control_visual':
+      if(i.action==='pause') return setPaused(true);
+      if(i.action==='play') return setPaused(false);
+      if(i.action==='reseed') return reseed();
+      if(i.action==='screenshot'){ snapshot(); return 'Saved a PNG.'; }
+      if(i.action==='record') return startCapture();
+      break;
+    case 'set_seed': if(Number.isInteger(i.seed)) return setSeed(i.seed); break;
+    case 'set_boost': if(typeof i.level==='number'&&isFinite(i.level)) return setBoost(i.level); break;
+    case 'set_audio_source':
+      if(i.source==='mic'){ toMic(); return 'Requested the microphone; the browser may ask the user for permission.'; }
+      if(i.source==='off'){ audioOff(); return 'Audio off; the synthetic beat drives the visual.'; }
+      break;
+    case 'set_timer': if(typeof i.seconds==='number') return addTimer(i.seconds,typeof i.label==='string'?i.label:''); break;
+    case 'cancel_timers': return cancelTimers();
+    case 'remember':
+      if(typeof i.fact==='string'&&i.fact.trim()){ mem.facts.push(i.fact.trim().slice(0,200)); if(mem.facts.length>30) mem.facts.shift(); saveMem(); return 'Remembered.'; }
+      break;
+    case 'forget_everything': mem.name=''; mem.facts=[]; saveMem(); return 'Memory erased.';
+  }
+  return {error:'Invalid input for '+name};
+}
+function contextLine(){
+  const now=new Date();
+  const parts=[
+    'local time '+now.toLocaleString([],{weekday:'long',year:'numeric',month:'long',day:'numeric',hour:'numeric',minute:'2-digit'}),
+    'seed 0x'+hex(seed),
+    'audio '+({mic:'microphone',file:'audio file',synth:'synthetic beat'}[source]),
+    paused?'paused':'playing',
+    'boost '+num(boost),
+    recording()?'recording':'',
+    timers.length?'timers: '+timerStatus():'',
+    mem.name?"user's name "+mem.name:'',
+    mem.facts.length?'remembered: '+mem.facts.join('; '):''
+  ].filter(Boolean);
+  return '['+parts.join(' | ')+']';
+}
+// after a mid-output refusal fallback, blocks before the last fallback marker must not be echoed back
+function echoable(content){
+  let cut=-1;
+  content.forEach((b,i)=>{ if(b.type==='fallback') cut=i; });
+  if(cut<0) return content;
+  return content.filter((b,i)=>i>cut||!/^(thinking|redacted_thinking|tool_use|server_tool_use)$/.test(b.type));
+}
+async function claudeTurn(id,q){
+  let mod;
+  try{ mod=await loadSDK(); }
+  catch(e){ say('could not load the Claude SDK (offline?)',5000); return false; }
+  if(id!==turnId) return true;
+  if(!AI.client) AI.client=new mod.default({apiKey:AI.key,dangerouslyAllowBrowser:true,maxRetries:1});
+  // history is append-only within a conversation; start fresh rather than trimming
+  if(AI.history.length>60) AI.history=[];
+  const mark=AI.history.length;
+  AI.history.push({role:'user',content:contextLine()+'\n'+q});
+  const ctrl=new AbortController();
+  let shown='', pending='';
+  AI.pending={mark,q,ctrl,shown:()=>shown};
+  // people fill a long pause before answering; so does Puffs, once, if the first words are slow
+  const hmm=setTimeout(()=>{ if(id===turnId&&!shown&&!speaking) ttsSay(pick('Hmm.','Let me think.','One sec.','Let me see.')); },1500);
+  const flush=all=>{
+    const m=all?pending:(pending.match(/^[\s\S]*[.!?…]["')\]]*(?=\s)/)||[''])[0];
+    if(m.trim()){ ttsSay(m); pending=pending.slice(m.length); }
+  };
+  try{
+    for(let hop=0;hop<6;hop++){
+      const stream=AI.client.beta.messages.stream({
+        model:AI.model,
+        max_tokens:16000,
+        system:SYSTEM,
+        tools:TOOLS,
+        messages:AI.history,
+        output_config:{effort:'low'},
+        cache_control:{type:'ephemeral'},
+        betas:['server-side-fallback-2026-07-01'],
+        fallbacks:'default'
+      },{signal:ctrl.signal});
+      stream.on('text',d=>{
+        if(id!==turnId) return;
+        shown+=d; pending+=d;
+        showExchange(q,shown);
+        flush(false);
+      });
+      const msg=await stream.finalMessage();
+      if(id!==turnId) throw new DOMException('superseded','AbortError');
+      flush(true);
+      if(msg.stop_reason==='refusal'){
+        AI.history.length=mark;
+        respond(q,"I can't help with that one.");
+        return true;
+      }
+      AI.history.push({role:'assistant',content:echoable(msg.content)});
+      if(msg.stop_reason!=='tool_use') break;
+      const results=[];
+      for(const b of msg.content){
+        if(b.type!=='tool_use') continue;
+        const out=runTool(b.name,b.input);
+        results.push(typeof out==='string'
+          ?{type:'tool_result',tool_use_id:b.id,content:out}
+          :{type:'tool_result',tool_use_id:b.id,content:out.error,is_error:true});
+      }
+      AI.history.push({role:'user',content:results});
+      if(shown&&!/\s$/.test(shown)) shown+=' ';
+    }
+    lastReply=shown.trim();
+    if(!lastReply){ lastReply='Done.'; respond(q,lastReply); }
+    return true;
+  }catch(e){
+    // aborted turns were already rolled back by abortClaude()
+    if(ctrl.signal.aborted||id!==turnId) return true;
+    AI.history.length=mark;
+    if(e instanceof mod.AuthenticationError||e instanceof mod.PermissionDeniedError){
+      AI.key=''; AI.client=null; lsSet('puffs.key',null); setState('');
+      respond(q,'Claude rejected that API key, so I disconnected it. Type slash key and a valid key to try again.');
+      return true;
+    }
+    if(e instanceof mod.RateLimitError){ respond(q,'Claude is rate limited right now. Try again in a moment.'); return true; }
+    say('claude: '+(e.status||e.name||'error'),5000);
+    console.warn(e);
+    return false;
+  }finally{
+    clearTimeout(hmm);
+    if(AI.pending&&AI.pending.ctrl===ctrl) AI.pending=null;
+  }
+}
+
+/* ===== frame ===== */
+function resize(){
+  DPR=Math.min(window.devicePixelRatio||1,2);
+  W=window.innerWidth; H=window.innerHeight;
+  SC=Math.min(W/720,H/900);
+  HS=Math.max(1,Math.min(2,SC));
+  FW=Math.min(W,H*0.8); FX=(W-FW)/2;
+  // conversation sits above the PUFFS mark unless the screen is wide enough to sit beside it
+  const besideMark=W/2-60*HS>584;
+  const besideStrip=W-(FX+FW*0.92)>270;
+  document.documentElement.style.setProperty('--sys-top',(besideStrip?10:Math.round(H*0.164+20*HS))+'px');
+  document.documentElement.style.setProperty('--talk-bottom',(besideMark?34:Math.round(H*0.023+44*HS))+'px');
+  const nw=Math.round(W*DPR), nh=Math.round(H*DPR);
+  if(glc.width!==nw||glc.height!==nh){
+    if(recording()) cancelCapture('window resized — recording cancelled');
+    glc.width=nw; glc.height=nh;
+    cv.width=nw; cv.height=nh;
+    hv.width=nw; hv.height=nh;
+    if(glOK){ gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT); }
+    invalidate();
+  }
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  hctx.setTransform(DPR,0,0,DPR,0,0);
+}
+
+function frame(now){
+  requestAnimationFrame(frame);
+  let dt=(now-last)/1000;
+  if(!(dt>0)) dt=0; else if(dt>0.1) dt=0.1;
+  last=now;
+  if(!paused){
+    elapsed+=dt;
+    if(speaking){
+      const s=Math.abs(Math.sin(now*0.014)+0.55*Math.sin(now*0.031));
+      voiceEnv=Math.min(1,Math.max(voiceEnv*0.88,0.40+0.60*Math.min(1,s)));
+    }else if(voiceEnv>0){
+      voiceEnv=voiceEnv-dt*3.2; if(voiceEnv<0) voiceEnv=0;
+    }
+    readAudio();
+  }
+  const prevTl=tl;
+  tl=elapsed%LOOP;
+  updateSpec();
+  tickCapture(prevTl);
+
+  // paused: the last frame stays on the preserved buffers; only redraw while settling
+  if(!paused||settle>0){
+    if(settle>0) settle--;
+    if(glOK) drawGL();
+
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    ctx.globalCompositeOperation='destination-out';
+    ctx.fillStyle='rgba(0,0,0,0.24)';
+    ctx.fillRect(0,0,W,H);
+    ctx.globalCompositeOperation='lighter';
+    ctx.save();
+    ctx.translate(W*0.5,H*0.505);
+    if(!glOK) drawStreaks2D();
+    drawParticles();
+    drawCenter(245*SC);
+    drawPetals(245*SC);
+    drawInnerRing(245*SC);
+    ctx.restore();
+  }
+
+  hctx.setTransform(DPR,0,0,DPR,0,0);
+  hctx.clearRect(0,0,W,H);
+  drawSpec();
+  drawHUD();
+  if(recState==='rec') composite();
+}
+
+/* ===== ui chrome ===== */
+const bar=$('bar'), menuBtn=$('menu'), helpEl=$('help'), recPill=$('recPill'), timersEl=$('timers');
+function setPressed(id,v){ const el=$(id), x=String(!!v); if(el.getAttribute('aria-pressed')!==x) el.setAttribute('aria-pressed',x); }
+function setLabel(id,t){ const n=$(id).firstChild; if(n.nodeValue!==t) n.nodeValue=t; }
+function syncButtons(){
+  setPressed('bV',assistantOn);
+  setPressed('bM',source==='mic');
+  setPressed('bA',source!=='synth');
+  setLabel('bL',paused?'play':'pause');
+  setLabel('bG',recording()?'recording…':'record 5s');
+}
+function openMenu(){ bar.classList.add('open'); menuBtn.setAttribute('aria-expanded','true'); }
+function closeMenu(){ bar.classList.remove('open'); menuBtn.setAttribute('aria-expanded','false'); }
+function openHelp(){
+  closeMenu();
+  $('helpAI').textContent=AI.key
+    ?'Connected. Commands run locally; open questions go to Claude. Type /key off to disconnect.'
+    :'Optional. Press T and type /key followed by your Anthropic API key. Open questions then go to Claude; the key stays in this browser.';
+  helpEl.classList.add('open');
+  $('helpX').focus();
+}
+function closeHelp(){ helpEl.classList.remove('open'); }
+const timerPills=new Map();
+function uiTick(){
+  tickTimers();
+  const now=performance.now();
+  if(!toastEl.hidden){
+    if(now>toastUntil+400) toastEl.hidden=true;
+    else if(now>toastUntil) toastEl.classList.add('out');
+  }
+  if(recState==='warm'||recState==='rec'){
+    recPill.hidden=false;
+    recPill.className='pill '+(recState==='rec'?'rec':'warm');
+    recPill.textContent=recState==='rec'
+      ?'rec '+Math.min(LOOP,elapsed-recStart).toFixed(1)+' / 5.0 s'
+      :'rec starts in '+Math.max(0,LOOP-(elapsed-warmStart)).toFixed(1)+' s';
+  }else recPill.hidden=true;
+  const live=new Set(), wall=Date.now();
+  for(const t of timers){
+    live.add(t.id);
+    let el=timerPills.get(t.id);
+    if(!el){
+      el=document.createElement('div'); el.className='pill timer'; el.title='click to cancel';
+      el.onclick=()=>{ const i=timers.findIndex(x=>x.id===t.id); if(i>=0) timers.splice(i,1); say('timer cancelled'); };
+      timerPills.set(t.id,el);
+    }
+    const sec=Math.max(0,Math.ceil((t.end-wall)/1000));
+    const h=Math.floor(sec/3600), m=Math.floor(sec%3600/60), x=sec%60;
+    el.textContent=(t.label?t.label+'  ':'timer  ')+(h?h+':'+String(m).padStart(2,'0'):m)+':'+String(x).padStart(2,'0');
+    timersEl.appendChild(el); // keeps soonest-first order
+  }
+  for(const [id,el] of timerPills) if(!live.has(id)){ el.remove(); timerPills.delete(id); }
+  syncButtons();
+}
+
+/* ===== input ===== */
+function act(k,e){
+  if(k==='escape'){
+    if(helpEl.classList.contains('open')) closeHelp();
+    else if(bar.classList.contains('open')) closeMenu();
+    else if(speaking||turnBusy){ interrupt(); setState(''); say('interrupted'); scheduleListen(); }
+    return;
+  }
+  if(k==='?'||k==='/'){ if(e) e.preventDefault(); helpEl.classList.contains('open')?closeHelp():openHelp(); return; }
+  if(helpEl.classList.contains('open')) return;
+  if(k==='m'){ if(e) e.preventDefault(); toMic(); }
+  else if(k==='f'){ if(e) e.preventDefault(); fileInput.click(); }
+  else if(k==='r'){ reseed(); }
+  else if(k==='g'){ startCapture(); }
+  else if(k==='p'){ snapshot(); }
+  else if(k==='l'){ setPaused(!paused); }
+  else if(k==='v'){ if(e) e.preventDefault(); toggleAssistant(); }
+  else if(k==='t'){ if(e) e.preventDefault(); openAsk(); }
+  else if(k===' '){ if(e) e.preventDefault(); toggleAudio(); }
+  else return;
+  hint.classList.remove('fresh');
+}
+window.addEventListener('keydown',e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey) return;
+  if(e.target===askInput||e.target===fileInput) return;
+  if(e.target.closest&&e.target.closest('button')&&(e.key===' '||e.key==='Enter')) return; // let focused buttons click
+  act(e.key.toLowerCase(),e);
+});
+bar.addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b) return;
+  act(b.dataset.k,null);
+  syncButtons();
+});
+menuBtn.addEventListener('click',()=>{ bar.classList.contains('open')?closeMenu():openMenu(); hint.classList.remove('fresh'); });
+$('helpX').addEventListener('click',closeHelp);
+helpEl.addEventListener('click',e=>{ if(e.target===helpEl) closeHelp(); });
+$('copyLink').addEventListener('click',()=>{
+  const done=()=>say('link copied — it opens this exact composition');
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(location.href).then(done,()=>say('copy failed — use the address bar'));
+  else say('copy failed — use the address bar');
+});
+// clicking the artwork closes the menu
+[glc,cv,hv].forEach(el=>el.addEventListener('pointerdown',closeMenu));
+let menuTimer=0;
+window.addEventListener('pointermove',e=>{
+  if(e.pointerType!=='mouse') return;
+  menuBtn.classList.add('show');
+  clearTimeout(menuTimer);
+  menuTimer=setTimeout(()=>{ if(!menuBtn.matches(':hover')) menuBtn.classList.remove('show'); },2500);
+});
+askInput.addEventListener('keydown',e=>{
+  e.stopPropagation();
+  if(e.key==='Enter'){
+    const v=askInput.value;
+    askInput.value='';
+    ask(v);
+  }else if(e.key==='Escape'){
+    if(speaking||turnBusy){ interrupt(); setState('typing'); }
+    else closeAsk();
+  }
+});
+fileInput.addEventListener('change',e=>{
+  const f=e.target.files&&e.target.files[0];
+  if(f) loadFile(f);
+  fileInput.value='';
+});
+let dragDepth=0;
+window.addEventListener('dragenter',e=>{ e.preventDefault(); dragDepth++; dropEl.style.display='grid'; });
+window.addEventListener('dragover',e=>{ e.preventDefault(); });
+window.addEventListener('dragleave',()=>{ if(--dragDepth<=0){ dragDepth=0; dropEl.style.display='none'; } });
+window.addEventListener('drop',e=>{
+  e.preventDefault(); dragDepth=0; dropEl.style.display='none';
+  const f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0];
+  if(f) loadFile(f);
+});
+window.addEventListener('resize',resize);
+
+/* ===== init ===== */
+setHint();
+resize();
+glOK=initGL();
+if(!glOK) say('WebGL unavailable — 2D fallback',5000);
+if(reduced){
+  for(let i=0;i<24;i++) readAudio();
+  paused=true; invalidate();
+  say('reduced motion — press [L] to animate',6000);
+}
+syncButtons();
+setTimeout(()=>hint.classList.remove('fresh'),9000);
+setInterval(uiTick,100); // not rAF: timers must still fire in a background tab
+if(qs.get('capture')==='1') setTimeout(startCapture,600);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

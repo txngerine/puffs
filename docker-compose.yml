@@ -1,0 +1,28 @@
+# Production-like local run: docker compose up --build  →  http://localhost:5050
+services:
+  mongo:
+    image: mongo:8
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    ports:
+      - "5050:5050"
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/puffs
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ACCESS_PASSWORD: ${ACCESS_PASSWORD:-}
+      DEVICE_DAILY_TOKENS: ${DEVICE_DAILY_TOKENS:-150000}
+      DAILY_TOKEN_BUDGET: ${DAILY_TOKEN_BUDGET:-2000000}
+    depends_on:
+      mongo:
+        condition: service_healthy
+
+volumes:
+  mongo-data:

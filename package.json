@@ -1,0 +1,27 @@
+{
+  "name": "puffs",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Realtime audio-reactive spectrogram with a voice assistant \u2014 MERN stack",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "npm run build -w client",
+    "start": "npm run start -w server",
+    "lint": "eslint .",
+    "test": "npm test -w server && npm test -w client",
+    "e2e": "playwright test -c e2e/playwright.config.js",
+    "android": "node scripts/android.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.64.0",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0"
+  },
+  "type": "module"
+}
