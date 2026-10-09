@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { data } from './routes/data.js';
 import { deviceRoutes } from './routes/device.js';
+import { search } from './routes/search.js';
 import { supported as deviceSupported } from './device/mac.js';
 import { rateLimit } from './middleware/limits.js';
 import { log, requestLog } from './logger.js';
@@ -50,6 +51,7 @@ export function createApp(config, { dbMode = () => 'unknown', serveClient = true
     req.deviceId = id;
     next();
   });
+  app.use('/api', search);
   const writes = rateLimit({ windowMs: 60_000, max: 60, key: (req) => 'w:' + req.deviceId });
   app.use('/api', (req, res, next) => (req.method === 'GET' ? next() : writes(req, res, next)));
   app.use('/api', data);

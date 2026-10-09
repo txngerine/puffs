@@ -16,6 +16,7 @@ export function recentSpeech(ms=20000){
 export const isSpeaking=()=>voice.speaking;
 export const getRankedVoices=()=>{ if(!rankedVoices.length) loadVoices(); return rankedVoices; };
 export function setVoiceByName(name){
+  if(!String(name||'').trim()){ voicePrefs.name=''; savePrefs(); return null; }
   const q=name.toLowerCase();
   const v=getRankedVoices().find(x=>voiceLabel(x).toLowerCase().includes(q)||x.name.toLowerCase().includes(q));
   if(!v) return null;

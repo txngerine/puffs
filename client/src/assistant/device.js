@@ -161,7 +161,7 @@ export function resolveMessage(msg, raw, ctx) {
       return { task: () => messageFlow({ ...msg, text }) };
     }
     case 'confirm': {
-      const change = said.match(/^(?:no[, ]+)?(?:change it to|make it|say|instead say|actually say)\s+(.+?)(?:\s+instead)?$/i);
+      const change = said.match(/^(?:(?:no|actually|wait)[, ]+)?(?:change (?:it|that) to|make it|say|instead say|actually say|tell (?:him|her|them))\s+(.+?)(?:\s+instead)?$/i);
       if (change) return { task: () => messageFlow({ ...msg, text: tidy(change[1]) }) };
       if (YES.test(said)) return { task: () => send(msg) };
       if (NO.test(said)) return { r: "Okay, I won't send it." };

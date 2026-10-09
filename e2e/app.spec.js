@@ -22,7 +22,7 @@ test('renders the artwork with GPU particles', async ({ page }) => {
     const t = document.createElement('canvas'); t.width = c.width; t.height = c.height;
     const g = t.getContext('2d'); g.drawImage(c, 0, 0);
     const d = g.getImageData(0, 0, t.width, t.height).data;
-    let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] > 20) n++;
+    let n = 0; for (let i = 0; i < d.length; i += 4) if (Math.max(d[i], d[i + 1], d[i + 2]) > 20) n++;
     return n;
   });
   expect(lit).toBeGreaterThan(500);
@@ -61,6 +61,8 @@ test('controls menu pauses and shows state', async ({ page }) => {
 });
 
 test('asks a follow-up question and completes the request (offline)', async ({ page }) => {
+  await page.goto('/?motion=1&debug=1'); // debug exposes window.__eve for the timer check
+  await page.locator('#gl').waitFor();
   await page.keyboard.press('t');
   const box = page.locator('#ask');
   await box.fill('set a timer for pasta');
@@ -69,5 +71,7 @@ test('asks a follow-up question and completes the request (offline)', async ({ p
   await box.fill('five minutes');
   await box.press('Enter');
   await expect(page.locator('#say')).toContainText('5 minutes for pasta');
-  await expect(page.locator('.pill.timer')).toContainText('pasta');
+  await expect.poll(() => page.evaluate(
+    () => window.__eve.timers.getTimers().some((t) => t.label.includes('pasta')),
+  )).toBe(true);
 });

@@ -5,6 +5,7 @@ const state = {
   seed: 0,
   toast: null,          // { id, text, until }
   talk: { rows: [], visible: false },
+  search: { query: '', results: [] },
   aState: '',           // listening | thinking | speaking | typing | ''
   assistantOn: false,
   wake: false,          // wake word on: Eve waits for "hey Eve"

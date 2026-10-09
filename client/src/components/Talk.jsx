@@ -7,6 +7,7 @@ const LABELS = { listening: 'listening', thinking: 'thinking', speaking: 'speaki
 // Bottom left: assistant state, the latest exchange, and the text box — one flow, so nothing overlaps.
 export default function Talk() {
   const talk = useStore((s) => s.talk);
+  const search = useStore((s) => s.search);
   const aState = useStore((s) => s.aState);
   const assistantOn = useStore((s) => s.assistantOn);
   const typing = useStore((s) => s.typing);
@@ -34,6 +35,19 @@ export default function Talk() {
             <span>{text}</span>
           </div>
         ))}
+        {search.results.length > 0 && (
+          <ol className="searchResults" aria-label={'Top search results for ' + search.query}>
+            {search.results.slice(0, 5).map((result, i) => (
+              <li key={result.url}>
+                <a href={result.url} target="_blank" rel="noopener noreferrer">
+                  <span className="resultTitle">{i + 1}. {result.title}</span>
+                  {result.snippet && <span className="resultSnippet">{result.snippet}</span>}
+                  <span className="resultUrl">{new URL(result.url).hostname}</span>
+                </a>
+              </li>
+            ))}
+          </ol>
+        )}
       </div>
       <input
         id="ask" ref={input} type="text" autoComplete="off" autoCapitalize="off" spellCheck={false}

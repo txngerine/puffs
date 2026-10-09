@@ -88,6 +88,24 @@ export default function App() {
     // act reads live state from the store, so the listener never goes stale
   }, []);
 
+  // cinema mode: the chrome fades after a few idle seconds and returns on any interaction
+  useEffect(() => {
+    const root = document.documentElement;
+    let last = performance.now();
+    const act = () => { last = performance.now(); root.classList.remove('idle'); };
+    const events = ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart'];
+    for (const e of events) window.addEventListener(e, act, { passive: true });
+    const iv = setInterval(() => {
+      const s = store.get();
+      if (performance.now() - last > 4000 && !s.menuOpen && !s.helpOpen) root.classList.add('idle');
+    }, 400);
+    return () => {
+      for (const e of events) window.removeEventListener(e, act);
+      clearInterval(iv);
+      root.classList.remove('idle');
+    };
+  }, []);
+
   return (
     <div id="stage" onPointerDown={(e) => { if (e.target.tagName === 'CANVAS') store.set({ menuOpen: false }); }}>
       <Stage />

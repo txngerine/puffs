@@ -30,6 +30,34 @@ const reduced = motionParam==='0' ? true
 const ph=n=>TAU*(tl/LOOP)*n;
 // while paused the scene is not redrawn; invalidate() re-renders a few frames so trails settle
 function invalidate(){ settle=Math.max(settle,30); }
+/* ===== aurora palette: the artwork shares the UI's ice → violet → orchid, tinted by seed ===== */
+const AURORA=[[103,232,249],[167,139,250],[232,121,249]];
+let hueC=1, hueS=0, tintBias=0, hueAngle=0;
+const TINT_GAIN=1.25;
+const bandsRGB=['','',''];
+function rotRGB(r,g,b){
+  const c=hueC, s=hueS, k=1/Math.sqrt(3), t1=(r+g+b)/3*(1-c);
+  return [
+    r*c+k*(b-g)*s+t1,
+    g*c+k*(r-b)*s+t1,
+    b*c+k*(g-r)*s+t1,
+  ];
+}
+function auroraJS(t){
+  t=t<0?0:t>1?1:t;
+  const i=t<0.5?0:1, f=t<0.5?t*2:(t-0.5)*2;
+  const a=AURORA[i], b=AURORA[i+1];
+  const c=rotRGB(a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f);
+  return c.map(v=>{ v=v*TINT_GAIN; return Math.round(v<0?0:v>255?255:v); });
+}
+function updateTint(){
+  hueAngle=((seed%15)-7)/7*0.21;
+  hueC=Math.cos(hueAngle); hueS=Math.sin(hueAngle);
+  tintBias=((seed>>>5)%9)/8*0.16;
+  for(let i=0;i<3;i++) bandsRGB[i]=auroraJS(0.12+i*0.38).join(',');
+}
+updateTint();
+
 /* ===== audio ===== */
 let bands=new Float32Array(NB), energy=0, bass=0, mid=0, treble=0;
 let boost=1;
@@ -230,54 +258,6 @@ function buildRings(){
 }
 buildRings();
 
-/* ===== spectrogram waterfall (phase-locked ring buffer) ===== */
-const SW=240, SH=64, STEP=LOOP/SW;
-const hist=new Uint8Array(SW*SH);
-const specOff=document.createElement('canvas'); specOff.width=SW; specOff.height=SH;
-const specCtx=specOff.getContext('2d');
-const specImg=specCtx.createImageData(SW,SH);
-let lastStep=-1;
-
-function writeCol(c){
-  const o=c*SH;
-  for(let i=0;i<NB;i++) hist[o+(SH-1-i)]=(bands[i]*255)|0;
-}
-function updateSpec(){
-  if(lastStep<0){
-    for(let c=0;c<SW;c++) writeCol(c);
-    lastStep=(tl/STEP)|0;
-    return;
-  }
-  const cur=(tl/STEP)|0;
-  if(cur===lastStep) return;
-  let s=lastStep, guard=0;
-  while(s!==cur&&guard++<SW){ s=(s+1)%SW; writeCol(s); }
-  lastStep=cur;
-}
-function drawSpec(){
-  const d=specImg.data, cur=lastStep;
-  for(let x=0;x<SW;x++){
-    const src=((cur+1+x)%SW)*SH;
-    for(let y=0;y<SH;y++){
-      const o=(y*SW+x)*4, v=hist[src+y];
-      d[o]=255; d[o+1]=255; d[o+2]=255; d[o+3]=v;
-    }
-  }
-  specCtx.putImageData(specImg,0,0);
-  const x=FX+FW*0.08, y=H*0.045, w=FW*0.84, h=H*0.085;
-  hctx.globalAlpha=0.92;
-  hctx.drawImage(specOff,x,y,w,h);
-  hctx.globalAlpha=1;
-  hctx.strokeStyle='#2c2c2c'; hctx.lineWidth=1;
-  hctx.strokeRect(x+0.5,y+0.5,w-1,h-1);
-  hctx.fillStyle='#585858';
-  hctx.font=(7*HS)+'px ui-monospace,SFMono-Regular,Menlo,monospace';
-  hctx.textBaseline='top'; hctx.textAlign='left';
-  hctx.fillText('SPECTRUM 20 Hz - 16 kHz',x,y+h+4);
-  hctx.textAlign='right';
-  hctx.fillText('240 COLS / 5.0 s LOOP',x+w,y+h+4);
-  hctx.textAlign='left';
-}
 /* ===== webgl field ===== */
 let gl=null, prog=null, U={}, tex=null, texData=new Uint8Array(NB*4), glOK=false;
 
@@ -297,8 +277,11 @@ function initGL(){
   const fs=[
   '#ifdef GL_FRAGMENT_PRECISION_HIGH','precision highp float;','#else','precision mediump float;','#endif',
   'uniform vec2 uRes;uniform float uT;uniform float uSeed;uniform float uPass;',
-  'uniform float uEnergy;uniform float uTreble;uniform sampler2D uBands;',
+  'uniform float uEnergy;uniform float uTreble;uniform sampler2D uBands;uniform vec2 uTint;',
   'const float TAU=6.28318530718;const float LOOP=5.0;',
+  'vec3 rotHue(vec3 v,float a){vec3 k=vec3(0.57735);return v*cos(a)+cross(k,v)*sin(a)+k*dot(k,v)*(1.0-cos(a));}',
+  'vec3 aurora(float t){vec3 a=vec3(0.404,0.910,0.976);vec3 b=vec3(0.655,0.545,0.980);vec3 c=vec3(0.910,0.475,0.976);',
+  ' return rotHue(t<0.5?mix(a,b,t*2.0):mix(b,c,(t-0.5)*2.0),uTint.x)*1.25;}',
   'float h11(float p){p=fract(p*0.1031);p*=p+33.33;p*=p+p;return fract(p);}',
   'float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);',
   ' float a=h11(i.x+i.y*57.0),b=h11(i.x+1.0+i.y*57.0),c=h11(i.x+(i.y+1.0)*57.0),d=h11(i.x+1.0+(i.y+1.0)*57.0);',
@@ -336,6 +319,7 @@ function initGL(){
   ' col+=vec3(1.0)*(0.008+0.022*uTreble)*smoothstep(0.95,1.30,r)*(1.0-smoothstep(1.30,1.60,r))*sm;',
   ' col*=smoothstep(0.30,0.62,r);',
   ' col+=(h11(gl_FragCoord.x+gl_FragCoord.y*1919.0+uT*7.0)-0.5)*0.007;',
+  ' col*=aurora(clamp(r*0.714+uTint.y,0.0,1.0));',
   ' gl_FragColor=vec4(max(col,vec3(0.0)),1.0);',
   '}'].join('\n');
 
@@ -350,7 +334,7 @@ function initGL(){
   const loc=gl.getAttribLocation(prog,'a'); aField=loc;
   gl.enableVertexAttribArray(loc);
   gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
-  ['uRes','uT','uSeed','uPass','uEnergy','uTreble','uBands'].forEach(k=>U[k]=gl.getUniformLocation(prog,k));
+  ['uRes','uT','uSeed','uPass','uEnergy','uTreble','uBands','uTint'].forEach(k=>U[k]=gl.getUniformLocation(prog,k));
   tex=gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D,tex);
   gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,NB,1,0,gl.RGBA,gl.UNSIGNED_BYTE,texData);
@@ -371,8 +355,11 @@ const PVS=[
   'attribute vec4 aP;attribute vec4 aW;attribute vec4 aX;attribute vec4 aV;attribute vec4 aB;attribute vec2 aS;',
   'uniform vec4 uRA['+NR+'];uniform vec4 uRB['+NR+'];',
   'uniform vec4 uK1;uniform vec4 uK2;uniform vec4 uM1;uniform vec2 uM2;uniform vec4 uView;',
-  'uniform float uBase;uniform float uSC;uniform float uDPR;',
-  'varying float vA;varying float vPs;varying float vRows;',
+  'uniform float uBase;uniform float uSC;uniform float uDPR;uniform vec2 uTint;',
+  'varying float vA;varying float vPs;varying float vRows;varying vec3 vTint;',
+  'vec3 rotHue(vec3 v,float a){vec3 k=vec3(0.57735);return v*cos(a)+cross(k,v)*sin(a)+k*dot(k,v)*(1.0-cos(a));}',
+  'vec3 aurora(float t){vec3 a=vec3(0.404,0.910,0.976);vec3 b=vec3(0.655,0.545,0.980);vec3 c=vec3(0.910,0.475,0.976);',
+  ' return rotHue(t<0.5?mix(a,b,t*2.0):mix(b,c,(t-0.5)*2.0),uTint.x)*1.25;}',
   'void main(){',
   ' int r=int(aS.y+0.5);',
   ' vec4 A=uRA[r];vec4 B=uRB[r];',          // A: rr*wob, cw, sw, bnd   B: bcos, bsin, ringA, q
@@ -387,6 +374,7 @@ const PVS=[
   ' }',
   ' float x=(aP.x*A.y-aP.y*A.z)*rad;',
   ' float y=(aP.x*A.z+aP.y*A.y)*rad*0.93;',
+  ' vTint=aurora(clamp(rad/uBase*0.714+uTint.y,0.0,1.0));',
   ' float sz=aS.x*uSC;',
   ' float h=max(0.45,sz*0.34);',
   ' vec2 c=uView.xy+vec2(x+sz*0.5,y+h*0.5);',
@@ -402,12 +390,12 @@ const PVS=[
   '}'].join('\n');
 const PFS=[
   'precision mediump float;',
-  'varying float vA;varying float vPs;varying float vRows;',
+  'varying float vA;varying float vPs;varying float vRows;varying vec3 vTint;',
   'void main(){',
   ' float row=floor(gl_PointCoord.y*vPs);',
   ' float first=floor((vPs-vRows)*0.5);',
   ' if(vA<=0.0||row<first||row>=first+vRows)discard;',
-  ' gl_FragColor=vec4(vec3(vA+1.0/255.0),1.0);',  // repays the field layer\'s per-frame trail floor
+  ' gl_FragColor=vec4(vTint*vA+vec3(1.0/255.0),1.0);', // white floor repays the field layer's trail decay
   '}'].join('\n');
 function initParticlesGL(){
   if(qs.get('particles')==='cpu') return false;
@@ -416,7 +404,7 @@ function initParticlesGL(){
   pprog=gl.createProgram(); gl.attachShader(pprog,v); gl.attachShader(pprog,f); gl.linkProgram(pprog);
   if(!gl.getProgramParameter(pprog,gl.LINK_STATUS)){ console.warn(gl.getProgramInfoLog(pprog)); return false; }
   ['aP','aW','aX','aV','aB','aS'].forEach(k=>PA[k]=gl.getAttribLocation(pprog,k));
-  ['uRA','uRB','uK1','uK2','uM1','uM2','uView','uBase','uSC','uDPR'].forEach(k=>PU[k]=gl.getUniformLocation(pprog,k));
+  ['uRA','uRB','uK1','uK2','uM1','uM2','uView','uBase','uSC','uDPR','uTint'].forEach(k=>PU[k]=gl.getUniformLocation(pprog,k));
   pbuf=gl.createBuffer();
   uploadParticles();
   return true;
@@ -452,6 +440,7 @@ function drawParticlesGL(){
   gl.uniform2f(PU.uM2,PK.m3c,PK.m3s);
   gl.uniform4f(PU.uView,W*0.5,H*0.505,W,H);
   gl.uniform1f(PU.uBase,245*SC); gl.uniform1f(PU.uSC,SC); gl.uniform1f(PU.uDPR,DPR);
+  gl.uniform2f(PU.uTint,hueAngle,tintBias);
   gl.bindBuffer(gl.ARRAY_BUFFER,pbuf);
   const F=4, sizes={aP:4,aW:4,aX:4,aV:4,aB:4,aS:2}; let off=0;
   for(const k of ['aP','aW','aX','aV','aB','aS']){
@@ -479,6 +468,7 @@ function drawGL(){
   gl.uniform1f(U.uSeed,seed%65536);
   gl.uniform1f(U.uEnergy,energy);
   gl.uniform1f(U.uTreble,treble);
+  gl.uniform2f(U.uTint,hueAngle,tintBias);
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D,tex);
   for(let i=0;i<NB;i++){
@@ -502,9 +492,9 @@ function drawGL(){
   if(gpuParticles) drawParticlesGL();
 }
 /* ===== 2d layers ===== */
-const LV=16, MAXA=0.32;
-const bk=[]; for(let i=0;i<LV;i++) bk.push(new Uint16Array(NR*TIERS*2));
-const bn=new Uint16Array(LV), lva=new Float32Array(LV);
+const LV=16, MAXA=0.32, LB=3;
+const bk=[]; for(let i=0;i<LV*LB;i++) bk.push(new Uint16Array(NR*TIERS*2));
+const bn=new Uint16Array(LV*LB), lva=new Float32Array(LV*LB);
 const RS=[]; for(let r=0;r<NR;r++) RS.push({rr:0,wob:0,cw:1,sw:0,bcos:1,bsin:0,bnd:0,ringA:0});
 
 function drawStreaks2D(){
@@ -517,7 +507,9 @@ function drawStreaks2D(){
     const r2=base*(1.05+0.34*pulse*(0.75+0.5*treble));
     const x1=Math.cos(a)*r1, y1=Math.sin(a)*r1*0.93;
     const x2=Math.cos(a)*r2, y2=Math.sin(a)*r2*0.93;
-    ctx.strokeStyle='rgba(255,255,255,'+(0.014+0.03*Math.min(1.6,pulse)).toFixed(4)+')';
+    let t=((r1+r2)*0.5/base)*0.714+tintBias; if(t<0)t=0; if(t>1)t=1;
+    const b=(t*3)|0;
+    ctx.strokeStyle='rgba('+bandsRGB[b>2?2:b]+','+(0.014+0.03*Math.min(1.6,pulse)).toFixed(4)+')';
     ctx.lineWidth=0.45*SC;
     ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
   }
@@ -557,20 +549,22 @@ function drawParticles(){
   bn.fill(0);
   for(let r=0;r<NR;r++){
     const ringA=RS[r].ringA;
+    const band=(r*LB/NR)|0;
     for(let t=0;t<TIERS;t++){
       const a=ringA*TIERF[t];
       if(a<0.004) continue;
       let lv=(Math.sqrt(a/MAXA)*16)|0; if(lv>15)lv=15;
-      const arr=bk[lv], n=bn[lv];
-      arr[n]=r; arr[n+1]=t; bn[lv]=n+2;
-      lva[lv]=a;
+      const li=lv*LB+band;
+      const arr=bk[li], n=bn[li];
+      arr[n]=r; arr[n+1]=t; bn[li]=n+2;
+      lva[li]=a;
     }
   }
 
-  for(let lv=0;lv<LV;lv++){
-    const n=bn[lv]; if(!n) continue;
-    ctx.fillStyle='rgba(255,255,255,'+lva[lv].toFixed(4)+')';
-    const arr=bk[lv];
+  for(let li=0;li<LV*LB;li++){
+    const n=bn[li]; if(!n) continue;
+    ctx.fillStyle='rgba('+bandsRGB[li%LB]+','+lva[li].toFixed(4)+')';
+    const arr=bk[li];
     for(let k=0;k<n;k+=2){
       const r=arr[k], t=arr[k+1];
       const R=RS[r], pts=rings[r].tiers[t], q=rings[r].q;
@@ -626,7 +620,7 @@ function drawInnerRing(base){
     const r=base*(0.34+0.018*Math.sin(i*0.67+ph(4)));
     const len=base*(0.035+0.065*(0.5+0.5*Math.sin(i*0.43-ph(3))))*(0.6+0.8*treble);
     const al=(0.04+0.08*(i%7===0?1:0))*(0.55+0.7*mid);
-    ctx.strokeStyle='rgba(255,255,255,'+al.toFixed(4)+')';
+    ctx.strokeStyle='rgba('+bandsRGB[0]+','+al.toFixed(4)+')';
     ctx.lineWidth=0.5*SC;
     ctx.beginPath();
     ctx.moveTo(Math.cos(a)*r,Math.sin(a)*r*0.93);
@@ -634,17 +628,38 @@ function drawInnerRing(base){
     ctx.stroke();
   }
 }
-/* ===== hud: part of the artwork, so it lands in exports (transient UI lives in the DOM) ===== */
-function drawMeter(g,x,y,v){
-  const w=56*HS, h=8*HS;
-  g.strokeStyle='#555'; g.lineWidth=1;
-  g.strokeRect(x+0.5,y+0.5,w-1,h-1);
-  const bw=13*HS;
-  let bx=w*0.536+(v-0.5)*24*HS-bw/2;
-  if(bx<1)bx=1; if(bx>w-1-bw)bx=w-1-bw;
-  g.fillStyle='#fff';
-  g.fillRect(x+bx,y+1,bw,h-2);
+/* speaking: aurora shockwaves ripple out of the core on each syllable */
+let vPrev=0;
+const ripples=[];
+function drawVoice(){
+  const e=voice.env;
+  if(voice.speaking){
+    if(vPrev<0.6&&e>=0.7&&ripples.length<7) ripples.push({t:elapsed});
+  }
+  vPrev=e;
+  if(e<=0.01&&!ripples.length) return;
+  ctx.globalCompositeOperation='lighter';
+  const base=245*SC;
+  if(e>0.02){
+    const g=ctx.createRadialGradient(0,0,0,0,0,base*0.62);
+    g.addColorStop(0,'rgba('+bandsRGB[1]+','+(0.15*e).toFixed(3)+')');
+    g.addColorStop(0.55,'rgba('+bandsRGB[1]+','+(0.05*e).toFixed(3)+')');
+    g.addColorStop(1,'rgba('+bandsRGB[1]+',0)');
+    ctx.fillStyle=g;
+    ctx.beginPath(); ctx.arc(0,0,base*0.62,0,TAU); ctx.fill();
+  }
+  for(let i=ripples.length-1;i>=0;i--){
+    const k=(elapsed-ripples[i].t)/1.5;
+    if(k>=1){ ripples.splice(i,1); continue; }
+    const rr=base*(0.36+1.05*k);
+    const a=0.45*(1-k)*(1-k);
+    const c=auroraJS(0.15+0.7*k);
+    ctx.strokeStyle='rgba('+c[0]+','+c[1]+','+c[2]+','+a.toFixed(3)+')';
+    ctx.lineWidth=Math.max(1,base*0.014*(1-0.5*k));
+    ctx.beginPath(); ctx.ellipse(0,0,rr,rr*0.93,0,0,TAU); ctx.stroke();
+  }
 }
+/* ===== hud: part of the artwork, so it lands in exports (transient UI lives in the DOM) ===== */
 function drawMark(g){
   g.font='900 '+(24*HS)+'px Arial,Helvetica,sans-serif';
   g.fillStyle='#eee';
@@ -656,24 +671,7 @@ function drawMark(g){
   g.restore();
 }
 function drawHUD(){
-  const g=hctx;
-  const narrow=(W/H)<=0.8;
-  g.textBaseline='top'; g.textAlign='left';
-  g.fillStyle='#eee';
-  g.font=(10*HS)+'px ui-monospace,SFMono-Regular,Menlo,monospace';
-  g.fillText(energy.toFixed(3),FX+FW*0.182,H*0.164);
-  const value=tl*370+45*Math.sin(ph(2))+25*bass;
-  g.fillText(value.toFixed(3),FX+FW*0.197,H*0.826);
-  drawMeter(g,FX+FW*0.462,H*0.164,bass);
-  drawMeter(g,FX+FW*0.462,H*0.826,treble);
-  g.fillStyle='#d8d8d8';
-  g.font=((narrow?7:8)*HS)+'px Arial,Helvetica,sans-serif';
-  g.textAlign=narrow?'right':'left';
-  const capX=narrow?FX+FW*0.91:FX+FW*0.736;
-  g.fillText('Realtime audio spectrogram',capX,H*0.747);
-  g.fillText('WebGL + Canvas, in the browser',capX,H*0.747+18*HS);
-  g.textAlign='left';
-  drawMark(g);
+  drawMark(hctx);
 }
 
 /* ===== capture ===== */
@@ -782,6 +780,7 @@ export function setPaused(p){
 }
 export function setSeed(n){
   seed=n>>>0;
+  updateTint();
   buildRings();
   if(gpuParticles) uploadParticles();
   try{
@@ -827,8 +826,6 @@ function resize(){
   FW=Math.min(W,H*0.8); FX=(W-FW)/2;
   // conversation sits above the EVE mark unless the screen is wide enough to sit beside it
   const besideMark=W/2-60*HS>584;
-  const besideStrip=W-(FX+FW*0.92)>270;
-  document.documentElement.style.setProperty('--sys-top',(besideStrip?10:Math.round(H*0.164+20*HS))+'px');
   document.documentElement.style.setProperty('--talk-bottom',(besideMark?34:Math.round(H*0.023+44*HS))+'px');
   const nw=Math.round(W*DPR), nh=Math.round(H*DPR);
   if(glc.width!==nw||glc.height!==nh){
@@ -860,7 +857,6 @@ function frame(now){
   }
   const prevTl=tl;
   tl=elapsed%LOOP;
-  updateSpec();
   tickCapture(prevTl);
 
   // paused: the last frame stays on the preserved buffers; only redraw while settling
@@ -881,12 +877,12 @@ function frame(now){
     drawCenter(245*SC);
     drawPetals(245*SC);
     drawInnerRing(245*SC);
+    drawVoice();
     ctx.restore();
   }
 
   hctx.setTransform(DPR,0,0,DPR,0,0);
   hctx.clearRect(0,0,W,H);
-  drawSpec();
   drawHUD();
   if(recState==='rec') composite();
 }
